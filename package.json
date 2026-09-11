@@ -1,0 +1,16 @@
+{
+  "name": "holdem-lab",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c yellow,green \"npm run dev -w @holdem/server\" \"npm run dev -w @holdem/web\"",
+    "build": "npm run build -ws --if-present",
+    "test": "npm run test -ws --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.5",
+    "typescript": "7.0.2"
+  }
+}

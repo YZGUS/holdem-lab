@@ -1,0 +1,21 @@
+{
+  "name": "@holdem/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@holdem/core": "0.1.0",
+    "@holdem/protocol": "0.1.0",
+    "ws": "8.21.3",
+    "zod": "4.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/ws": "8.18.1",
+    "tsx": "4.23.13"
+  }
+}
