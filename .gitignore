@@ -3,4 +3,4 @@ dist/
 .sites-runtime/
 .DS_Store
 *.log
-
+*.tsbuildinfo
