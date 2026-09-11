@@ -6,10 +6,11 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(circle at 50% 35%, #163b30 0, #071713 45%, #030b09 100%); }
+html, body, #root { width: 100%; height: 100%; overflow: hidden; }
+body { margin: 0; min-width: 320px; background: radial-gradient(circle at 50% 35%, #163b30 0, #071713 45%, #030b09 100%); }
 button { font: inherit; }
 
-.game-shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; }
+.game-shell { height: 100dvh; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
 .topbar { display: flex; align-items: center; justify-content: space-between; padding: 1.25rem 2rem; border-bottom: 1px solid #ffffff15; background: #04100dcc; backdrop-filter: blur(16px); }
 .eyebrow { margin: 0 0 .2rem; color: #c7a55b; font: 700 .75rem/1 ui-monospace, monospace; letter-spacing: .17em; }
 h1 { margin: 0; font-size: 1.15rem; font-weight: 650; }
@@ -17,11 +18,11 @@ h1 { margin: 0; font-size: 1.15rem; font-weight: 650; }
 .table-meta span { padding: .45rem .75rem; border: 1px solid #ffffff18; border-radius: 999px; background: #ffffff08; }
 .table-meta .online::before { content: ""; display: inline-block; width: .45rem; height: .45rem; margin-right: .45rem; border-radius: 50%; background: #63d39b; }
 
-.play-area { position: relative; min-height: 36rem; display: grid; place-items: center; padding: 3rem 1.5rem 2rem; overflow: hidden; }
-.turn-banner { position: absolute; top: 1rem; display: flex; align-items: center; gap: .45rem; color: #c8d3cc; font-size: .875rem; }
+.play-area { position: relative; min-height: 0; display: grid; place-items: center; padding: 3.5rem 1.5rem 3rem; overflow: hidden; }
+.turn-banner { position: absolute; top: 1rem; left: 1.5rem; display: flex; align-items: center; gap: .45rem; color: #c8d3cc; font-size: .875rem; z-index: 3; }
 .turn-banner span { width: .5rem; height: .5rem; border-radius: 50%; background: #e3bb63; box-shadow: 0 0 0 .3rem #e3bb6318; }
 .turn-banner strong { min-width: 1.8rem; padding: .2rem .4rem; text-align: center; color: #111b16; border-radius: .35rem; background: #e3bb63; }
-.table { position: relative; width: min(75vw, 58rem); aspect-ratio: 2 / 1; border: .7rem solid #5b3a20; border-radius: 50%; background: radial-gradient(ellipse, #17674f 0, #0c4a39 58%, #073b2d 100%); box-shadow: inset 0 0 0 .18rem #b88a4c, inset 0 0 5rem #001b14aa, 0 2rem 6rem #0008; }
+.table { position: relative; width: min(75vw, 58rem, calc((100dvh - 17rem) * 1.65)); aspect-ratio: 2 / 1; border: .7rem solid #5b3a20; border-radius: 50%; background: radial-gradient(ellipse, #17674f 0, #0c4a39 58%, #073b2d 100%); box-shadow: inset 0 0 0 .18rem #b88a4c, inset 0 0 5rem #001b14aa, 0 2rem 6rem #0008; }
 .felt-mark { position: absolute; inset: 0; display: grid; place-items: center; color: #ffffff08; font: 800 10rem/1 Georgia, serif; }
 .pot { position: absolute; top: 38%; left: 50%; display: grid; transform: translate(-50%, -50%); text-align: center; }
 .pot small { color: #a9bdb4; font-size: .75rem; }
@@ -53,15 +54,21 @@ h1 { margin: 0; font-size: 1.15rem; font-weight: 650; }
 .tool-rail { position: absolute; right: 0; top: 50%; display: grid; gap: .5rem; transform: translateY(-50%); z-index: 5; }
 .tool-rail button { min-width: 2.75rem; min-height: 4.5rem; padding: .4rem; color: #aebdb6; border: 1px solid #ffffff18; border-right: 0; border-radius: .75rem 0 0 .75rem; background: #071713e8; writing-mode: vertical-rl; }
 .tool-rail button.selected { color: #f3dda8; border-color: #c7a55b66; background: #183328; }
-.drawer { position: absolute; top: 0; right: -19rem; bottom: 0; width: 19rem; padding: 4.5rem 1.2rem 1.2rem; border-left: 1px solid #ffffff18; background: #06120ff4; backdrop-filter: blur(18px); transition: right .2s ease; z-index: 4; }
+.drawer { position: absolute; top: 0; right: -22rem; bottom: 0; width: 22rem; padding: 4rem 1.2rem 1rem; overflow-y: auto; border-left: 1px solid #ffffff18; background: #06120ff4; backdrop-filter: blur(18px); transition: right .2s ease; z-index: 4; }
 .drawer.visible { right: 0; }
 .drawer h2 { margin: 0 0 1rem; font-size: 1rem; }
 .history-list { display: grid; gap: .25rem; }
 .history-list div { padding: .7rem 0; border-bottom: 1px solid #ffffff10; }
 .history-list span { color: #8da198; font-size: .75rem; }
 .history-list p { margin: .2rem 0 0; font-size: .875rem; }
-.rank-list { display: grid; gap: 0; margin: 0; padding-left: 2rem; }
-.rank-list li { padding: .55rem .35rem; border-bottom: 1px solid #ffffff0c; font-size: .875rem; }
+.rank-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; counter-reset: rank; }
+.rank-list li { display: grid; grid-template-columns: 1.25rem 4.75rem 1fr; align-items: center; gap: .4rem; min-height: 3.15rem; border-bottom: 1px solid #ffffff0c; counter-increment: rank; }
+.rank-list li::before { content: counter(rank) "."; color: #7f958b; font-size: .75rem; }
+.rank-list li > strong { font-size: .8rem; font-weight: 600; white-space: nowrap; }
+.rank-example { display: flex; gap: .18rem; justify-content: flex-end; }
+.rank-example .card-face { width: 1.55rem; height: 2.15rem; border-radius: .25rem; box-shadow: none; }
+.rank-example .card-face b, .rank-example .card-face span { font-size: .58rem; }
+.rank-example .card-face span { margin-top: .08rem; }
 
 .action-dock { position: relative; width: min(44rem, calc(100% - 2rem)); display: grid; gap: .65rem; justify-self: center; padding: 1rem 0 1.25rem; }
 .main-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: .65rem; }
@@ -82,13 +89,13 @@ h1 { margin: 0; font-size: 1.15rem; font-weight: 650; }
 @media (max-width: 700px) {
   .topbar { align-items: flex-start; padding: 1rem; }
   .table-meta span:not(.online) { display: none; }
-  .play-area { min-height: 31rem; padding-inline: .5rem; }
+  .play-area { min-height: 0; padding: 3.25rem .5rem 3rem; }
   .table { width: 94vw; aspect-ratio: 1.28 / 1; }
   .seat-card { min-width: 10rem; padding: .6rem; }
   .community { gap: .25rem; }
   .card-slot, .community .card-face { width: 2.15rem; height: 3.08rem; }
   .action-dock { width: calc(100% - 1rem); }
-  .drawer { width: min(18rem, 84vw); }
+  .drawer { right: min(-22rem, -92vw); width: min(22rem, 92vw); }
   .raise-panel { grid-template-columns: 1fr; }
   .raise-panel .confirm { width: 100%; }
   .quick-row { display: grid; grid-template-columns: repeat(4, 1fr); }

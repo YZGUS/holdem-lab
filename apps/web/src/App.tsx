@@ -7,7 +7,18 @@ type WireAction = Extract<ClientMessage, { type: 'ACTION' }>['action'];
 const phaseNames: Record<PlayerView['phase'], string> = {
   PRE_FLOP: '翻牌前', FLOP: '翻牌', TURN: '转牌', RIVER: '河牌', SHOWDOWN: '摊牌', FINISHED: '本手结束',
 };
-const rankNames = ['皇家同花顺', '同花顺', '四条', '葫芦', '同花', '顺子', '三条', '两对', '一对', '高牌'];
+const rankExamples: Array<{ name: string; cards: Card[] }> = [
+  { name: '皇家同花顺', cards: ['As', 'Ks', 'Qs', 'Js', 'Ts'] },
+  { name: '同花顺', cards: ['9h', '8h', '7h', '6h', '5h'] },
+  { name: '四条', cards: ['Ac', 'Ad', 'Ah', 'As', '9c'] },
+  { name: '葫芦', cards: ['Kc', 'Kd', 'Kh', '8s', '8d'] },
+  { name: '同花', cards: ['Ah', 'Jh', '8h', '5h', '2h'] },
+  { name: '顺子', cards: ['9c', '8d', '7s', '6h', '5c'] },
+  { name: '三条', cards: ['Qc', 'Qd', 'Qs', '9h', '3d'] },
+  { name: '两对', cards: ['Jc', 'Jd', '5s', '5h', '2c'] },
+  { name: '一对', cards: ['Ac', 'Ad', '9s', '6h', '3c'] },
+  { name: '高牌', cards: ['As', 'Jd', '8c', '5h', '2s'] },
+];
 
 function CardFace({ card, hidden = false }: { card?: Card; hidden?: boolean }) {
   if (!card) return <i className="card-slot" />;
@@ -194,7 +205,7 @@ export function App() {
         </nav>
         <aside className={`drawer ${drawer ? 'visible' : ''}`} aria-live="polite">
           {drawer === 'history' && <><h2>本手记录</h2><div className="history-list">{[...(view?.recentHistory ?? [])].reverse().map((entry) => <div key={entry.index}><span>{phaseNames[entry.phase]}</span><p>{entry.text}</p></div>)}</div></>}
-          {drawer === 'ranks' && <><h2>牌型大小</h2><ol className="rank-list">{rankNames.map((rank) => <li key={rank}>{rank}</li>)}</ol></>}
+          {drawer === 'ranks' && <><h2>牌型大小</h2><ol className="rank-list">{rankExamples.map((rank) => <li key={rank.name}><strong>{rank.name}</strong><div className="rank-example" aria-label={`${rank.name}示例`}>{rank.cards.map((card) => <CardFace card={card} key={card} />)}</div></li>)}</ol></>}
         </aside>
       </section>
 
