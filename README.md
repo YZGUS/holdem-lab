@@ -1,23 +1,22 @@
 # Holdem Lab
 
-一个以独立规则核心为基础的 Web 德州扑克项目。目标是让本机牌局、局域网房间、Bot、回放和策略实验复用同一套状态与动作协议。
+一个由服务端权威规则驱动的 Web 德州扑克系统，可用于本机练习、局域网多人、回放和策略实验。
 
-## 当前版本
+## 已完成功能
 
-第一开发切片已经可以运行：
+- 2–8 人无限注德州扑克，覆盖完整街道、最小加注、短筹码 All-in、未跟注筹码退回、主池、多层边池、平分底池和奇数筹码分配。
+- Human 与 Bot 统一提交 `PlayerAction`，规则核心不依赖 React、WebSocket、数据库或 AI。
+- 局域网大厅：创建房间、输入房间码加入、座位容量、Human + Bot 混合牌桌和房主开局。
+- 会话恢复：浏览器刷新或网络短暂断开后，使用原会话回到座位；房间、牌局和最近 20 手回放保存到本地 JSON。
+- 每位玩家获得独立 `PlayerView`；Bot 只接收自己的 `DecisionContext`，其他玩家底牌不会进入它的输入。
+- 服务器行动倒计时：Bot 自动行动，真人超时自动过牌或弃牌。
+- 本手记录、10 种完整牌型示例、逐动作回放、JSON 导出、确定性随机种子复现。
+- 2–8 人批量模拟及胜局统计；当前只启用基础跟注策略。
+- 单端口生产运行：同一 Node 服务提供网页、WebSocket 和健康检查，便于部署到普通云容器。
 
-- 本机单挑桌：Human 对基础 Bot
-- 服务端持有完整 `GameState`，浏览器只提交 `PlayerAction`
-- Fold / Check / Call / Raise / All-in
-- 翻牌前到摊牌的完整流程
-- 确定性洗牌、牌型比较、平局拆分
-- 玩家专属视图，对手暗牌只在摊牌时公开
-- 动作 ID 去重、手牌与状态版本校验
-- 操作记录、牌型帮助、底池快捷加注
+Monte Carlo、CFR、GTO、RL 按要求只保留插件接口。实现新算法时注册 `StrategyPlugin`，其 `decide` 方法只能读取 `DecisionContext`，无需修改规则核心、房间服务或 UI。
 
-当前版本用于验证核心链路，尚未实现多人边池、房间大厅、持久化和断线身份恢复。
-
-## 运行
+## 本机与局域网运行
 
 需要 Node.js 当前 LTS 版本。
 
@@ -26,22 +25,42 @@ npm install
 npm run dev
 ```
 
-浏览器打开 `http://127.0.0.1:5173`。牌局服务默认监听 `ws://127.0.0.1:8787`。
+- 本机打开 `http://127.0.0.1:5173`
+- 局域网设备打开 `http://<运行电脑的局域网 IP>:5173`
+- 牌局服务监听 `0.0.0.0:8787`
+
+## 生产或云容器运行
+
+```bash
+npm run build
+PORT=8787 npm start
+```
+
+访问 `http://<服务器地址>:8787`。反向代理只需把 HTTP 与 WebSocket 一并转发到同一端口，HTTPS 页面会自动使用 WSS。
+
+可选环境变量：
+
+- `PORT`：HTTP 与 WebSocket 端口。
+- `HOLDEM_DATA_FILE`：牌局与会话 JSON 的保存位置。
+- `HOLDEM_WEB_DIST`：网页构建目录。
+- `VITE_WS_URL`：网页与牌局服务分开部署时的 WebSocket 地址。
+
+当前 JSON 持久化实现了单机恢复。迁移到多实例云服务时，实现 `PersistenceAdapter` 并替换为数据库或共享存储即可，协议和规则核心不需要变化。
 
 ## 验证
 
 ```bash
 npm test
 npm run build
+curl http://127.0.0.1:8787/health
 ```
 
 ## 目录
 
 ```text
-apps/web          React 牌桌界面
-apps/server       本机权威牌局服务
-packages/core     无 UI、网络和数据库依赖的规则核心
-packages/protocol 浏览器与服务端消息契约
+apps/web          React 大厅、多人牌桌、回放与模拟界面
+apps/server       房间、Session、WebSocket、倒计时与持久化
+packages/core     纯规则核心、牌型计算、边池与确定性回放
+packages/protocol 网络消息、房间视图与版本契约
+packages/bot      Bot 策略插件边界、基础策略与批量模拟
 ```
-
-下一阶段优先扩展通用 2–8 人座位、主池与多层边池，再增加局域网房间和会话恢复。

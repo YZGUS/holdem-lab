@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json"
+    "start": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test src/room-service.test.ts"
   },
   "dependencies": {
+    "@holdem/bot": "0.1.0",
     "@holdem/core": "0.1.0",
     "@holdem/protocol": "0.1.0",
     "ws": "8.21.3",

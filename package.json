@@ -6,6 +6,7 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "dev": "concurrently -k -n server,web -c yellow,green \"npm run dev -w @holdem/server\" \"npm run dev -w @holdem/web\"",
+    "start": "npm run start -w @holdem/server",
     "build": "npm run build -ws --if-present",
     "test": "npm run test -ws --if-present"
   },

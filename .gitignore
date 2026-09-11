@@ -1,6 +1,4 @@
 node_modules/
 dist/
-.sites-runtime/
-.DS_Store
-*.log
 *.tsbuildinfo
+.data/
