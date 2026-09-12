@@ -5,7 +5,10 @@ import {
 } from '@holdem/core';
 import type { RoomView } from '@holdem/protocol';
 import { CardFace } from './CardFace';
+import { MatchSettlement } from './MatchSettlement';
 import type { ClientNotice } from './useGameClient';
+import { SoundControls } from './presentation/SoundControls';
+import { usePresentationEffects } from './presentation/usePresentationEffects';
 
 const phaseNames: Record<TableView['phase'], string> = {
   PRE_FLOP: '翻牌前', FLOP: '翻牌', TURN: '转牌', RIVER: '河牌', SHOWDOWN: '摊牌', FINISHED: '本手结束',
@@ -87,6 +90,8 @@ export function PokerTable({
   const [playingReplay, setPlayingReplay] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [cardTheme, setCardTheme] = useState<'classic' | 'contrast'>(() => sessionStorage.getItem('holdem-card-theme') === 'contrast' ? 'contrast' : 'classic');
+  const [settlementOpen, setSettlementOpen] = useState(false);
+  usePresentationEffects(table, Boolean(replay));
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 250);
@@ -111,6 +116,14 @@ export function PokerTable({
     }, 700);
     return () => window.clearTimeout(timer);
   }, [playingReplay, replay, replayStep]);
+  useEffect(() => {
+    if (room.status !== 'FINISHED' || replay) {
+      setSettlementOpen(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSettlementOpen(true), 900);
+    return () => window.clearTimeout(timer);
+  }, [replay, room.id, room.status, table.handId]);
 
   const replayState = useMemo(() => replay ? replayHand(replay, replayStep) : null, [replay, replayStep]);
   const displayTable = useMemo(() => replayState ? tableView(replayState) : table, [replayState, table]);
@@ -162,6 +175,8 @@ export function PokerTable({
   const remaining = !replay && room.turnDeadline ? Math.max(0, Math.ceil((room.turnDeadline - now) / 1000)) : null;
   const isHost = room.hostPlayerId === room.viewerPlayerId;
   const pendingRebuys = room.players.filter((player) => player.rebuyStatus === 'PENDING');
+  const fundedPlayers = room.players.filter((player) => player.stack > 0);
+  const pausedForPlayers = room.status === 'PAUSED' && displayTable.phase === 'FINISHED' && fundedPlayers.length < 2;
   const isObserver = !displayPrivate || (viewerRoomPlayer.stack === 0 && displayTable.phase === 'FINISHED');
   const canRequestRebuy = room.gameMode === 'POINTS'
     && room.rebuyEnabled
@@ -193,15 +208,16 @@ export function PokerTable({
     <header className="topbar">
       <div className="table-identity"><p className="eyebrow">HOLDEM LAB · #{room.id}</p><h1>{room.name}</h1></div>
       <div className="hand-stage" aria-label="牌局进度"><strong>第 {displayTable.handNumber} 手</strong><span>{phaseNames[displayTable.phase]}</span></div>
-      <div className="table-meta" aria-label="牌桌信息"><span>{room.gameMode === 'POINTS' ? '积分桌' : '淘汰赛'}</span><span>盲注 {room.smallBlind}/{room.bigBlind}</span><span className={`status-pill ${connection.toLowerCase()}`}>{connection === 'OPEN' ? '已连接' : '正在重连'}</span><button className="ghost compact theme-toggle" onClick={toggleCardTheme}>卡面：{cardTheme === 'classic' ? '经典' : '高对比'}</button>{isHost && <button className="ghost compact danger" disabled={busy} onClick={disband}>解散</button>}<button className="ghost compact" onClick={onLeave}>离桌</button></div>
+      <div className="table-meta" aria-label="牌桌信息"><span className="meta-mode">{room.gameMode === 'POINTS' ? '积分桌' : '淘汰赛'}</span><span className="meta-blinds">盲注 {room.smallBlind}/{room.bigBlind}</span><span className={`status-pill ${connection.toLowerCase()}`}>{connection === 'OPEN' ? '已连接' : '正在重连'}</span><SoundControls /><button className="ghost compact theme-toggle" onClick={toggleCardTheme}>卡面：{cardTheme === 'classic' ? '经典' : '高对比'}</button>{isHost && <button className="ghost compact danger host-action" disabled={busy} onClick={disband}>解散</button>}<button className="ghost compact leave-action" onClick={onLeave}>离桌</button></div>
     </header>
 
     <section className={`play-area${drawer ? ' panel-open' : ''}`} aria-label="德州扑克牌桌">
       <div className="turn-banner"><span />{replay ? `第 ${displayTable.handNumber} 手回放` : displayTable.phase === 'FINISHED' ? displayTable.resultText : currentPlayerLabel ? `轮到${currentPlayerLabel === '你' ? '你' : ` ${currentPlayerLabel}`}行动` : room.status === 'PAUSED' ? '牌局已暂停' : '正在同步牌局'}</div>
       <div className={`table seats-${room.players.length}`}>
         <div className="felt-mark">H</div>
-        <div className="pot"><small>{phaseNames[displayTable.phase]} · {displayTable.pots.length > 1 ? `${displayTable.pots.length} 个底池` : '底池'}</small><strong>{displayTable.pot.toLocaleString()}</strong>{displayTable.pots.length > 1 && <em>{displayTable.pots.map((pot) => pot.amount).join(' / ')}</em>}</div>
-        <div className="community" aria-label="公共牌">{[0, 1, 2, 3, 4].map((index) => <CardFace card={displayTable.board[index]} key={index} />)}</div>
+        <div className="deck-anchor" data-effect-deck aria-hidden="true"><i /><i /><i /></div>
+        <div className="pot" data-effect-pot><small>{phaseNames[displayTable.phase]} · {displayTable.pots.length > 1 ? `${displayTable.pots.length} 个底池` : '底池'}</small><strong>{displayTable.pot.toLocaleString()}</strong>{displayTable.pots.length > 1 && <em>{displayTable.pots.map((pot) => pot.amount).join(' / ')}</em>}</div>
+        <div className="community" aria-label="公共牌">{[0, 1, 2, 3, 4].map((index) => <CardFace card={displayTable.board[index]} target={{ kind: 'board', index }} key={index} />)}</div>
 
         {room.players.map((roomPlayer, index) => {
           const player = gamePlayerOrObserver(roomPlayer, displayTable.players.find((item) => item.id === roomPlayer.id));
@@ -211,15 +227,15 @@ export function PokerTable({
           const relativeSeat = (index - viewerIndex + room.players.length) % room.players.length;
           return <article
             className={`seat ${player.id === room.viewerPlayerId ? 'hero' : ''} ${player.id === displayTable.currentPlayerId ? 'active' : ''} ${player.id === nextPlayerId ? 'next' : ''} ${displayTable.winnerIds.includes(player.id) ? 'winner' : ''} ${player.folded ? 'folded' : ''} ${!player.inHand ? 'spectator' : ''}`}
-            style={seatPosition(index, viewerIndex, room.players.length)} data-position={relativeSeat} key={player.id}
+            style={seatPosition(index, viewerIndex, room.players.length)} data-position={relativeSeat} data-effect-player-id={player.id} key={player.id}
           >
-            <div className="seat-cards">{ownCards?.length ? ownCards.map((card) => <CardFace card={card} key={card} />) : player.inHand ? <><CardFace card="2s" hidden /><CardFace card="3s" hidden /></> : null}</div>
+            <div className="seat-cards">{ownCards?.length ? ownCards.map((card, cardIndex) => <CardFace card={card} target={{ kind: 'hole', playerId: player.id, index: cardIndex }} key={card} />) : player.inHand ? <><CardFace card="2s" hidden target={{ kind: 'hole', playerId: player.id, index: 0 }} /><CardFace card="3s" hidden target={{ kind: 'hole', playerId: player.id, index: 1 }} /></> : null}</div>
             <div className="seat-card">
               <div className={`avatar ${player.kind.toLowerCase()}`}>{player.kind === 'BOT' ? 'AI' : player.id === room.viewerPlayerId ? '你' : player.name[0]}</div>
               <div><strong>{player.id === room.viewerPlayerId ? '你' : player.name}</strong><small>{player.kind === 'BOT' ? 'Bot' : '玩家'}{stateText ? ` · ${stateText}` : ''}</small></div>
               <span>{roomPlayer.stack.toLocaleString()}</span>
+              {roles.length > 0 && <div className="position-badges" aria-label={`${player.name}的位置`}>{roles.map((role) => <span key={role}>{role}</span>)}</div>}
             </div>
-            {roles.length > 0 && <div className="position-badges" aria-label={`${player.name}的位置`}>{roles.map((role) => <span key={role}>{role}</span>)}</div>}
             {displayTable.handRanks[player.id] && <div className="rank-chip">{displayTable.handRanks[player.id].description || displayTable.handRanks[player.id].name}</div>}
             {player.streetBet > 0 && <div className="bet-chip">{player.streetBet}</div>}
             {player.id === displayTable.currentPlayerId && remaining !== null && <div className={`countdown ${remaining <= 5 ? 'urgent' : ''}`}>{remaining}</div>}
@@ -240,6 +256,13 @@ export function PokerTable({
           {drawer === 'replays' && <><p className="drawer-empty">选择一手查看这一整局的过程。</p><div className="replay-list">{room.replays.map((item) => <button key={item.handId} onClick={() => onGetReplay(item.handId)}><strong>第 {item.handNumber} 手</strong><span>{item.resultText}</span><small>{item.actionCount} 次动作</small></button>)}</div></>}
         </div>}
       </aside>
+      {settlementOpen && !replay && <MatchSettlement
+        room={room}
+        table={displayTable}
+        onClose={() => setSettlementOpen(false)}
+        onViewReplays={() => { setSettlementOpen(false); setDrawer('replays'); }}
+        onReturnLobby={onLeave}
+      />}
     </section>
 
     <footer className="action-dock" aria-label="玩家操作">
@@ -253,7 +276,8 @@ export function PokerTable({
         <button onClick={onClearReplay}>退出回放</button>
       </div> : <>
         {raiseOpen && legal.minRaiseTo !== null && <div className="raise-panel" role="dialog" aria-label="加注设置"><div className="quick-row">{quickRaises.map((item) => <button key={item.label} onClick={() => setRaiseTo(item.value)}>{item.label}</button>)}<button onClick={() => setRaiseTo(legal.maxRaiseTo)}>全下</button></div><label><span>加注到</span><output>{raiseTo.toLocaleString()}</output><input type="range" min={legal.minRaiseTo} max={legal.maxRaiseTo} value={raiseTo} onChange={(event) => setRaiseTo(Number(event.target.value))} /></label><button className="confirm" onClick={() => act({ type: 'RAISE', raiseTo })}>确认加注</button></div>}
-        {room.status === 'FINISHED' ? <p className="match-finished">整局结束 · 共 {displayTable.handNumber} 手</p>
+        {room.status === 'FINISHED' ? <button className="match-finished" onClick={() => setSettlementOpen(true)}>整局结束 · 查看结算</button>
+          : pausedForPlayers ? <div className="round-paused"><span><strong>牌局暂停</strong>{fundedPlayers[0] ? `${fundedPlayers[0].id === room.viewerPlayerId ? '你' : fundedPlayers[0].name} 暂时领先 · ${fundedPlayers[0].stack.toLocaleString()}` : '暂无可参赛玩家'}</span>{canRequestRebuy && <button className="primary" disabled={busy} onClick={onRequestRebuy}>申请补充 {room.rebuyAmount.toLocaleString()}</button>}</div>
           : isObserver ? <div className="observer-bar"><span>{observerText}</span>{canRequestRebuy && <button className="primary" disabled={busy} onClick={onRequestRebuy}>申请补充 {room.rebuyAmount.toLocaleString()}</button>}</div>
             : displayTable.phase === 'FINISHED' ? <p className="auto-next-hand">{room.status === 'PAUSED' ? '牌局已暂停，等待玩家补充筹码' : '下一手即将自动开始…'}</p>
               : viewerGamePlayer?.allIn && !viewerGamePlayer.folded ? <p className="auto-next-hand">已全下，等待本手结算</p>
