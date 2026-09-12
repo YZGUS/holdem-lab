@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import {
-  applyAction, createGame, exportReplay, foldPlayer, playerView, type GameState, type HandReplay,
-  type PlayerAction, type PlayerProfile, type PlayerView,
+  applyAction, createGame, exportReplay, foldPlayer, playerView, tableView, type GameState, type HandReplay,
+  type PlayerAction, type PlayerProfile, type PlayerView, type TableView,
 } from '@holdem/core';
 import type {
-  ClientMessage, ReplaySummary, RoomPresence, RoomStatus, RoomSummary, RoomView, SessionView,
+  ClientMessage, GameMode, RebuyStatus, ReplaySummary, RoomLedgerEntry, RoomPresence, RoomStatus,
+  RoomSummary, RoomView, SessionView,
 } from '@holdem/protocol';
 import type { PersistenceAdapter } from './persistence.js';
 import { RoomEngine } from './room-engine.js';
@@ -26,6 +27,9 @@ interface RoomPlayer {
   stack: number;
   connected: boolean;
   presence: RoomPresence;
+  buyInTotal: number;
+  rebuyCount: number;
+  rebuyStatus: RebuyStatus;
   sessionToken?: string;
   strategyId?: string;
 }
@@ -39,6 +43,11 @@ export interface RoomRecord {
   startingStack: number;
   smallBlind: number;
   bigBlind: number;
+  gameMode: GameMode;
+  maxHands: number | null;
+  rebuyEnabled: boolean;
+  rebuyAmount: number;
+  maxRebuys: number | null;
   turnSeconds: number;
   turnDeadline: number | null;
   inactiveSince: number | null;
@@ -47,6 +56,7 @@ export interface RoomRecord {
   game?: GameState;
   handNumber: number;
   replays: HandReplay[];
+  ledger: RoomLedgerEntry[];
   handledActionIds: Set<string>;
 }
 
@@ -54,26 +64,35 @@ interface StoredRoom extends Omit<RoomRecord, 'handledActionIds'> {
   handledActionIds: string[];
 }
 
-interface LegacyRoomPlayer extends Omit<RoomPlayer, 'presence'> {
+interface LegacyRoomPlayer extends Omit<RoomPlayer, 'presence' | 'buyInTotal' | 'rebuyCount' | 'rebuyStatus'> {
   presence?: RoomPresence;
   left?: boolean;
+  buyInTotal?: number;
+  rebuyCount?: number;
+  rebuyStatus?: RebuyStatus;
 }
 
-interface LegacyStoredRoom extends Omit<StoredRoom, 'players' | 'inactiveSince' | 'pauseReason' | 'status'> {
-  status: Exclude<RoomStatus, 'PAUSED'>;
+interface LegacyStoredRoom extends Omit<StoredRoom, 'players' | 'inactiveSince' | 'pauseReason' | 'status' | 'gameMode' | 'maxHands' | 'rebuyEnabled' | 'rebuyAmount' | 'maxRebuys' | 'ledger'> {
+  status: RoomStatus;
   players: LegacyRoomPlayer[];
   inactiveSince?: number | null;
   pauseReason?: RoomRecord['pauseReason'];
+  gameMode?: GameMode;
+  maxHands?: number | null;
+  rebuyEnabled?: boolean;
+  rebuyAmount?: number;
+  maxRebuys?: number | null;
+  ledger?: RoomLedgerEntry[];
 }
 
 export interface StoredServerState {
-  schemaVersion: 2;
+  schemaVersion: 3;
   sessions: SessionRecord[];
   rooms: StoredRoom[];
 }
 
 export interface LegacyStoredServerState {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   sessions: SessionRecord[];
   rooms: LegacyStoredRoom[];
 }
@@ -104,7 +123,7 @@ export class RoomService {
     private readonly now: () => number = Date.now,
   ) {
     const stored = persistence.load();
-    if (!stored || (stored.schemaVersion !== 1 && stored.schemaVersion !== 2)) return;
+    if (!stored || ![1, 2, 3].includes(stored.schemaVersion)) return;
 
     stored.sessions.forEach((session) => this.sessions.set(session.token, session));
     stored.rooms.forEach((storedRoom) => {
@@ -118,6 +137,9 @@ export class RoomService {
           stack: player.stack,
           connected: player.kind === 'BOT',
           presence: player.presence ?? 'AT_TABLE',
+          buyInTotal: player.buyInTotal ?? storedRoom.startingStack,
+          rebuyCount: player.rebuyCount ?? 0,
+          rebuyStatus: player.rebuyStatus ?? 'NONE',
           ...(player.sessionToken ? { sessionToken: player.sessionToken } : {}),
           ...(player.strategyId ? { strategyId: player.strategyId } : {}),
         }));
@@ -127,7 +149,19 @@ export class RoomService {
         turnDeadline: null,
         inactiveSince: storedRoom.inactiveSince ?? null,
         pauseReason: storedRoom.pauseReason ?? null,
+        gameMode: storedRoom.gameMode ?? 'TOURNAMENT',
+        maxHands: storedRoom.maxHands ?? null,
+        rebuyEnabled: storedRoom.rebuyEnabled ?? false,
+        rebuyAmount: storedRoom.rebuyAmount ?? storedRoom.startingStack,
+        maxRebuys: storedRoom.maxRebuys ?? null,
         players,
+        ledger: storedRoom.ledger ?? players.map((player, index) => ({
+          index,
+          type: 'INITIAL_BUY_IN' as const,
+          playerId: player.id,
+          amount: storedRoom.startingStack,
+          text: `${player.name} 获得起始筹码 ${storedRoom.startingStack}`,
+        })),
         handledActionIds: new Set(storedRoom.handledActionIds),
       };
       this.roomEngine.reconcile(room, this.now());
@@ -138,12 +172,12 @@ export class RoomService {
       const room = this.rooms.get(session.roomId);
       if (!room?.players.some((player) => player.id === session.playerId)) session.roomId = undefined;
     });
-    if (stored.schemaVersion === 1) this.save();
+    if (stored.schemaVersion !== 3) this.save();
   }
 
   private save() {
     this.persistence.save({
-      schemaVersion: 2,
+      schemaVersion: 3,
       sessions: clone([...this.sessions.values()]),
       rooms: [...this.rooms.values()].map((room) => ({
         ...clone(room),
@@ -215,6 +249,7 @@ export class RoomService {
     if (session.roomId) throw new Error('你已经属于一个房间，请先返回或解散原房间');
     if (message.botCount >= message.maxPlayers) throw new Error('至少要保留一个真人座位');
     if (message.smallBlind >= message.bigBlind || message.startingStack < message.bigBlind * 10) throw new Error('盲注或起始筹码设置不合理');
+    if (message.gameMode === 'TOURNAMENT' && message.rebuyEnabled) throw new Error('淘汰赛不能启用补充筹码');
     let id = roomCode();
     while (this.rooms.has(id)) id = roomCode();
     session.name = message.playerName;
@@ -227,6 +262,9 @@ export class RoomService {
       stack: message.startingStack,
       connected: true,
       presence: 'AT_TABLE',
+      buyInTotal: message.startingStack,
+      rebuyCount: 0,
+      rebuyStatus: 'NONE',
       sessionToken,
     }];
     for (let index = 0; index < message.botCount; index += 1) {
@@ -238,6 +276,9 @@ export class RoomService {
         stack: message.startingStack,
         connected: true,
         presence: 'AT_TABLE',
+        buyInTotal: message.startingStack,
+        rebuyCount: 0,
+        rebuyStatus: 'NONE',
         strategyId: 'basic-check-call',
       });
     }
@@ -250,6 +291,11 @@ export class RoomService {
       startingStack: message.startingStack,
       smallBlind: message.smallBlind,
       bigBlind: message.bigBlind,
+      gameMode: message.gameMode,
+      maxHands: message.maxHands,
+      rebuyEnabled: message.gameMode === 'POINTS' && message.rebuyEnabled,
+      rebuyAmount: message.rebuyAmount,
+      maxRebuys: message.maxRebuys,
       turnSeconds: message.turnSeconds,
       turnDeadline: null,
       inactiveSince: null,
@@ -257,6 +303,13 @@ export class RoomService {
       players,
       handNumber: 0,
       replays: [],
+      ledger: players.map((player, index) => ({
+        index,
+        type: 'INITIAL_BUY_IN',
+        playerId: player.id,
+        amount: message.startingStack,
+        text: `${player.name} 获得起始筹码 ${message.startingStack}`,
+      })),
       handledActionIds: new Set(),
     };
     this.rooms.set(id, room);
@@ -283,8 +336,12 @@ export class RoomService {
       stack: room.startingStack,
       connected: true,
       presence: 'AT_TABLE',
+      buyInTotal: room.startingStack,
+      rebuyCount: 0,
+      rebuyStatus: 'NONE',
       sessionToken,
     });
+    this.addLedger(room, 'INITIAL_BUY_IN', session.playerId, `${playerName} 获得起始筹码 ${room.startingStack}`, room.startingStack);
     room.players.sort((left, right) => left.seat - right.seat);
     this.roomEngine.reconcile(room, this.now());
     this.save();
@@ -341,6 +398,42 @@ export class RoomService {
     return closed;
   }
 
+  requestRebuy(sessionToken: string) {
+    const { room, player } = this.requireMembership(sessionToken);
+    if (room.gameMode !== 'POINTS' || !room.rebuyEnabled) throw new Error('当前房间不允许补充筹码');
+    if (player.stack > 0) throw new Error('筹码用完后才能申请补充');
+    if (player.rebuyStatus !== 'NONE') throw new Error('补充申请已经提交');
+    if (room.maxHands !== null && room.handNumber >= room.maxHands) throw new Error('牌局已达到手数上限');
+    if (room.maxRebuys !== null && player.rebuyCount >= room.maxRebuys) throw new Error('已达到补充次数上限');
+    const stillInHand = room.game?.phase !== 'FINISHED' && room.game?.players.some((item) => item.id === player.id);
+    if (stillInHand) throw new Error('请等待本手结算完成');
+
+    player.rebuyStatus = 'PENDING';
+    this.addLedger(room, 'REBUY_REQUESTED', player.id, `${player.name} 申请补充 ${room.rebuyAmount}`, room.rebuyAmount);
+    this.save();
+    return room;
+  }
+
+  resolveRebuy(sessionToken: string, playerId: string, approved: boolean) {
+    const { room, session } = this.requireMembership(sessionToken);
+    if (room.hostPlayerId !== session.playerId) throw new Error('只有房主可以处理补充申请');
+    const player = room.players.find((item) => item.id === playerId);
+    if (!player || player.rebuyStatus !== 'PENDING') throw new Error('找不到待处理的补充申请');
+
+    player.rebuyStatus = approved ? 'APPROVED' : 'NONE';
+    this.addLedger(
+      room,
+      approved ? 'REBUY_APPROVED' : 'REBUY_REJECTED',
+      player.id,
+      approved ? `房主批准 ${player.name} 补充 ${room.rebuyAmount}` : `房主拒绝 ${player.name} 的补充申请`,
+      approved ? room.rebuyAmount : undefined,
+    );
+    if (approved && (!room.game || room.game.phase === 'FINISHED')) this.applyApprovedRebuys(room);
+    this.roomEngine.reconcile(room, this.now());
+    this.save();
+    return room;
+  }
+
   expireInactiveRoom(roomId: string) {
     const room = this.rooms.get(roomId);
     if (!room || !this.roomEngine.shouldExpire(room, this.now())) return null;
@@ -358,6 +451,21 @@ export class RoomService {
     });
     this.rooms.delete(roomId);
     return { roomId, memberTokens };
+  }
+
+  private addLedger(room: RoomRecord, type: RoomLedgerEntry['type'], playerId: string, text: string, amount?: number) {
+    room.ledger.push({ index: room.ledger.length, type, playerId, text, ...(amount === undefined ? {} : { amount }) });
+  }
+
+  private applyApprovedRebuys(room: RoomRecord) {
+    room.players.forEach((player) => {
+      if (player.rebuyStatus !== 'APPROVED') return;
+      player.stack += room.rebuyAmount;
+      player.buyInTotal += room.rebuyAmount;
+      player.rebuyCount += 1;
+      player.rebuyStatus = 'NONE';
+      this.addLedger(room, 'REBUY_APPLIED', player.id, `${player.name} 获得补充筹码 ${room.rebuyAmount}`, room.rebuyAmount);
+    });
   }
 
   startGame(sessionToken: string) {
@@ -459,11 +567,20 @@ export class RoomService {
   private archiveFinishedHand(room: RoomRecord) {
     if (!room.game || room.game.phase !== 'FINISHED') return;
     if (!room.replays.some((replay) => replay.handId === room.game!.handId)) room.replays.push(exportReplay(room.game));
-    if (room.players.filter((player) => player.stack > 0).length < 2) {
+    if (room.maxHands !== null && room.handNumber >= room.maxHands) {
       room.status = 'FINISHED';
       room.pauseReason = null;
       room.turnDeadline = null;
+      return;
     }
+    this.applyApprovedRebuys(room);
+    if (room.gameMode === 'TOURNAMENT' && room.players.filter((player) => player.stack > 0).length < 2) {
+      room.status = 'FINISHED';
+      room.pauseReason = null;
+      room.turnDeadline = null;
+      return;
+    }
+    this.roomEngine.reconcile(room, this.now());
   }
 
   replay(sessionToken: string, handId: string) {
@@ -500,12 +617,14 @@ export class RoomService {
         botCount: room.players.filter((player) => player.kind === 'BOT').length,
         smallBlind: room.smallBlind,
         bigBlind: room.bigBlind,
+        gameMode: room.gameMode,
+        maxHands: room.maxHands,
         membership: member?.presence ?? null,
       };
     });
   }
 
-  roomView(roomId: string, viewerPlayerId: string): { room: RoomView; view?: PlayerView } {
+  roomView(roomId: string, viewerPlayerId: string): { room: RoomView; table?: TableView; view?: PlayerView } {
     const room = this.requireRoom(roomId);
     const summary = this.listRooms(viewerPlayerId).find((item) => item.id === roomId)!;
     const replays: ReplaySummary[] = room.replays.map((replay) => ({
@@ -521,13 +640,18 @@ export class RoomService {
       startingStack: room.startingStack,
       turnSeconds: room.turnSeconds,
       turnDeadline: room.turnDeadline,
-      players: room.players.map(({ id, name, kind, seat, stack, connected, presence }) => ({
-        id, name, kind, seat, stack, connected, presence,
+      rebuyEnabled: room.rebuyEnabled,
+      rebuyAmount: room.rebuyAmount,
+      maxRebuys: room.maxRebuys,
+      players: room.players.map(({ id, name, kind, seat, stack, connected, presence, buyInTotal, rebuyCount, rebuyStatus }) => ({
+        id, name, kind, seat, stack, connected, presence, buyInTotal, rebuyCount, rebuyStatus,
       })),
       replays,
+      ledger: clone(room.ledger),
     };
     return {
       room: roomView,
+      ...(room.game ? { table: tableView(room.game) } : {}),
       ...(room.game?.players.some((player) => player.id === viewerPlayerId)
         ? { view: playerView(room.game, viewerPlayerId) }
         : {}),

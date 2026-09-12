@@ -119,8 +119,16 @@ export interface DecisionContext {
   recentHistory: GameEvent[];
 }
 
-export interface PlayerView extends Omit<DecisionContext, 'playerId'> {
-  viewerId: string;
+export interface TableView {
+  handId: string;
+  handNumber: number;
+  version: number;
+  phase: Phase;
+  board: Card[];
+  pot: number;
+  pots: PotSummary[];
+  players: PublicPlayer[];
+  recentHistory: GameEvent[];
   currentPlayerId: string | null;
   dealerId: string;
   smallBlindId: string;
@@ -129,6 +137,14 @@ export interface PlayerView extends Omit<DecisionContext, 'playerId'> {
   resultText?: string;
   revealedCards: Record<string, Card[]>;
   handRanks: Record<string, HandRank>;
+}
+
+export interface PlayerView {
+  viewerId: string;
+  handId: string;
+  version: number;
+  holeCards: Card[];
+  legalActions: LegalActions;
 }
 
 export interface CreateGameOptions {

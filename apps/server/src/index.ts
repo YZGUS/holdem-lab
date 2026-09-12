@@ -173,11 +173,12 @@ function scheduleRoom(roomId: string) {
   turnTimers.set(roomId, timer);
 }
 
-function errorView(sessionToken: string | undefined) {
+function errorRoomState(sessionToken: string | undefined) {
   const session = sessionToken ? service.session(sessionToken) : undefined;
   if (!session?.roomId) return undefined;
   try {
-    return service.roomView(session.roomId, session.playerId).view;
+    const { table, view } = service.roomView(session.roomId, session.playerId);
+    return { ...(table ? { table } : {}), ...(view ? { view } : {}) };
   } catch {
     return undefined;
   }
@@ -197,7 +198,7 @@ server.on('connection', (client) => {
       send(client, { type: 'ERROR', message: '消息参数无效' });
       return;
     }
-      const message = parsed.data;
+    const message = parsed.data;
     try {
       if (message.type === 'HELLO') {
         const hello = service.hello(message.sessionToken);
@@ -264,6 +265,14 @@ server.on('connection', (client) => {
           if (memberClient) send(memberClient, { type: 'ROOM_CLOSED', roomId: closed.roomId, message: '房主已解散房间' });
         });
         broadcastLobby();
+      } else if (message.type === 'REQUEST_REBUY') {
+        const room = service.requestRebuy(sessionToken);
+        broadcastRoom(room.id);
+      } else if (message.type === 'RESOLVE_REBUY') {
+        const room = service.resolveRebuy(sessionToken, message.playerId, message.approved);
+        scheduleRoom(room.id);
+        broadcastRoom(room.id);
+        broadcastLobby();
       } else if (message.type === 'START_GAME') {
         const room = service.startGame(sessionToken);
         scheduleRoom(room.id);
@@ -284,8 +293,8 @@ server.on('connection', (client) => {
       }
     } catch (error) {
       const sessionToken = clientTokens.get(client);
-      const view = errorView(sessionToken);
-      send(client, { type: 'ERROR', message: error instanceof Error ? error.message : '操作失败', ...(view ? { view } : {}) });
+      const state = errorRoomState(sessionToken);
+      send(client, { type: 'ERROR', message: error instanceof Error ? error.message : '操作失败', ...state });
     }
   });
 

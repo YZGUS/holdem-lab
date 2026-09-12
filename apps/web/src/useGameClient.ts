@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { HandReplay, PlayerAction, PlayerView } from '@holdem/core';
+import type { HandReplay, PlayerAction, PlayerView, TableView } from '@holdem/core';
 import { PROTOCOL_VERSION, type ClientMessage, type RoomSummary, type RoomView, type ServerMessage, type SessionView, type SimulationReport } from '@holdem/protocol';
 
 const sessionKey = 'holdem-lab-session';
@@ -13,11 +13,12 @@ function websocketUrl() {
 export function useGameClient() {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef(0);
-  const pendingActionRef = useRef<{ resolve: (view: PlayerView) => void; reject: (error: Error) => void; timer: number } | null>(null);
+  const pendingActionRef = useRef<{ resolve: (table: TableView) => void; reject: (error: Error) => void; timer: number } | null>(null);
   const [connection, setConnection] = useState<'CONNECTING' | 'OPEN' | 'CLOSED'>('CONNECTING');
   const [session, setSession] = useState<SessionView | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [room, setRoom] = useState<RoomView | null>(null);
+  const [table, setTable] = useState<TableView | null>(null);
   const [view, setView] = useState<PlayerView | null>(null);
   const [replay, setReplay] = useState<HandReplay | null>(null);
   const [simulation, setSimulation] = useState<SimulationReport | null>(null);
@@ -47,15 +48,16 @@ export function useGameClient() {
           setBusy(false);
         } else if (message.type === 'ROOM') {
           setRoom(message.room);
+          setTable(message.table ?? null);
           setView(message.view ?? null);
           setSession((current) => current ? { ...current, roomId: message.room.id, roomPresence: 'AT_TABLE' } : current);
           setNotice('');
           setBusy(false);
           const pending = pendingActionRef.current;
-          if (pending && message.view) {
+          if (pending && message.table) {
             window.clearTimeout(pending.timer);
             pendingActionRef.current = null;
-            pending.resolve(message.view);
+            pending.resolve(message.table);
           }
         } else if (message.type === 'ROOM_CLOSED') {
           const pending = pendingActionRef.current;
@@ -65,6 +67,7 @@ export function useGameClient() {
             pending.reject(new Error(message.message));
           }
           setRoom(null);
+          setTable(null);
           setView(null);
           setReplay(null);
           setSession((current) => current ? { token: current.token, playerId: current.playerId, name: current.name } : current);
@@ -77,7 +80,10 @@ export function useGameClient() {
           setSimulation(message.result);
           setBusy(false);
         } else {
-          if (message.view) setView(message.view);
+          if (message.table) {
+            setTable(message.table);
+            setView(message.view ?? null);
+          }
           setNotice(message.message);
           setBusy(false);
           const pending = pendingActionRef.current;
@@ -114,8 +120,8 @@ export function useGameClient() {
     return true;
   }, []);
 
-  const submitAction = useCallback((action: PlayerAction) => new Promise<PlayerView>((resolve, reject) => {
-    if (!view || view.currentPlayerId !== view.viewerId) {
+  const submitAction = useCallback((action: PlayerAction) => new Promise<TableView>((resolve, reject) => {
+    if (!table || !view || table.currentPlayerId !== view.viewerId) {
       reject(new Error('现在没有轮到你行动'));
       return;
     }
@@ -129,17 +135,18 @@ export function useGameClient() {
       reject(new Error('等待牌桌确认超时'));
     }, 6000);
     pendingActionRef.current = { resolve, reject, timer };
-    const sent = send({ type: 'ACTION', actionId: crypto.randomUUID(), handId: view.handId, expectedVersion: view.version, action });
+    const sent = send({ type: 'ACTION', actionId: crypto.randomUUID(), handId: table.handId, expectedVersion: table.version, action });
     if (!sent) {
       window.clearTimeout(timer);
       pendingActionRef.current = null;
       reject(new Error('牌桌尚未连接'));
     }
-  }), [send, view]);
+  }), [send, table, view]);
 
   const leaveRoom = useCallback(() => {
     if (send({ type: 'LEAVE_ROOM' })) {
       setRoom(null);
+      setTable(null);
       setView(null);
       setReplay(null);
       setSession((current) => current ? { token: current.token, playerId: current.playerId, name: current.name } : current);
@@ -149,6 +156,7 @@ export function useGameClient() {
   const leaveTable = useCallback(() => {
     if (send({ type: 'LEAVE_TABLE' })) {
       setRoom(null);
+      setTable(null);
       setView(null);
       setReplay(null);
       setSession((current) => current ? { ...current, roomPresence: 'AWAY' } : current);
@@ -156,7 +164,7 @@ export function useGameClient() {
   }, [send]);
 
   return {
-    connection, session, rooms, room, view, replay, simulation, busy, notice,
+    connection, session, rooms, room, table, view, replay, simulation, busy, notice,
     clearReplay: () => setReplay(null),
     clearNotice: () => setNotice(''),
     refreshRooms: () => send({ type: 'LIST_ROOMS' }, false),
@@ -166,6 +174,8 @@ export function useGameClient() {
     leaveRoom,
     leaveTable,
     disbandRoom: () => send({ type: 'DISBAND_ROOM' }),
+    requestRebuy: () => send({ type: 'REQUEST_REBUY' }),
+    resolveRebuy: (playerId: string, approved: boolean) => send({ type: 'RESOLVE_REBUY', playerId, approved }),
     startGame: () => send({ type: 'START_GAME' }),
     newHand: () => send({ type: 'NEW_HAND' }),
     submitAction,

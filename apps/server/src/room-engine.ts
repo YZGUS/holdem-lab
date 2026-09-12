@@ -14,6 +14,9 @@ export interface RoomLifecycleState {
   inactiveSince: number | null;
   pauseReason: 'NO_ONLINE_HUMAN' | 'NOT_ENOUGH_PLAYERS' | null;
   players: RoomLifecyclePlayer[];
+  game?: {
+    phase: string;
+  };
 }
 
 export type RoomLifecycleEvent =
@@ -50,6 +53,7 @@ export class RoomEngine {
     const previousStatus = room.status;
     const hasOnlinePlayer = room.players.some((player) => player.kind === 'HUMAN' && player.connected && player.presence === 'AT_TABLE');
     const eligiblePlayers = room.players.filter((player) => player.stack > 0 && (player.kind === 'BOT' || player.presence === 'AT_TABLE'));
+    const handInProgress = Boolean(room.game && room.game.phase !== 'FINISHED');
 
     if (!hasOnlinePlayer) {
       room.inactiveSince ??= now;
@@ -61,7 +65,7 @@ export class RoomEngine {
     } else {
       room.inactiveSince = null;
       if (room.status === 'PLAYING' || room.status === 'PAUSED') {
-        if (eligiblePlayers.length >= 2) {
+        if (handInProgress || eligiblePlayers.length >= 2) {
           room.status = 'PLAYING';
           room.pauseReason = null;
         } else {

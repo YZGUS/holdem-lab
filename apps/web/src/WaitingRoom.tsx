@@ -14,7 +14,7 @@ export function WaitingRoom({ room, connection, busy, onStart, onLeave, onDisban
     </header>
     <section className="waiting-card">
       <div className="code-block"><span>房间码</span><strong>{room.id}</strong><button onClick={copyCode}>复制</button></div>
-      <div className="waiting-copy"><p>同一局域网的玩家打开本机地址，输入房间码即可入座。</p><span>{room.smallBlind}/{room.bigBlind} 盲注 · {room.startingStack.toLocaleString()} 起始筹码 · {room.turnSeconds} 秒行动</span></div>
+      <div className="waiting-copy"><p>同一局域网的玩家打开本机地址，输入房间码即可入座。</p><span>{room.gameMode === 'POINTS' ? '积分桌' : '淘汰赛'} · {room.smallBlind}/{room.bigBlind} 盲注 · {room.startingStack.toLocaleString()} 起始筹码 · {room.maxHands === null ? '不限手数' : `${room.maxHands} 手`}</span></div>
       <div className="seat-list">
         {Array.from({ length: room.maxPlayers }, (_, seat) => {
           const player = room.players.find((item) => item.seat === seat);

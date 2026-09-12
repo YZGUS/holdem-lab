@@ -16,6 +16,11 @@ function roomRequest(playerName: string) {
     smallBlind: 10,
     bigBlind: 20,
     turnSeconds: 30,
+    gameMode: 'TOURNAMENT' as const,
+    maxHands: null,
+    rebuyEnabled: false,
+    rebuyAmount: 1000,
+    maxRebuys: null,
   };
 }
 
@@ -29,12 +34,15 @@ describe('room and session flow', () => {
     service.joinRoom(second.token, room.id, 'Bob');
     service.startGame(first.token);
 
-    const firstView = service.roomView(room.id, first.playerId).view!;
-    const secondView = service.roomView(room.id, second.playerId).view!;
+    const firstRoom = service.roomView(room.id, first.playerId);
+    const secondRoom = service.roomView(room.id, second.playerId);
+    const firstView = firstRoom.view!;
+    const secondView = secondRoom.view!;
     assert.equal(firstView.holeCards.length, 2);
     assert.equal(secondView.holeCards.length, 2);
-    assert.deepEqual(firstView.revealedCards, {});
-    assert.deepEqual(secondView.revealedCards, {});
+    assert.deepEqual(firstRoom.table!.revealedCards, {});
+    assert.deepEqual(secondRoom.table!.revealedCards, {});
+    assert.equal('players' in firstView, false);
     assert.notDeepEqual(firstView.holeCards, secondView.holeCards);
 
     const restored = new RoomService(persistence);
@@ -143,6 +151,28 @@ describe('room and session flow', () => {
     assert.equal(restored.session(host.token)?.roomId, undefined);
   });
 
+  it('resumes an unfinished hand when an all-in player reconnects with zero remaining stack', () => {
+    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
+    const host = service.hello().session;
+    const room = service.createRoom(host.token, {
+      ...roomRequest('Alice'),
+      botCount: 1,
+      gameMode: 'POINTS',
+      rebuyEnabled: true,
+    });
+    service.startGame(host.token);
+
+    service.applyForPlayer(room.id, host.playerId, { type: 'ALL_IN' });
+    assert.equal(room.game!.phase, 'PRE_FLOP');
+    assert.equal(room.players.find((player) => player.id === host.playerId)!.stack, 0);
+
+    service.setConnected(host.token, false);
+    assert.equal(room.status, 'PAUSED');
+    service.setConnected(host.token, true);
+    assert.equal(room.status, 'PLAYING');
+    assert.equal(room.pauseReason, null);
+  });
+
   it('advances from a finished hand without a host action', () => {
     const service = new RoomService(new MemoryPersistence<PersistedServerState>());
     const first = service.hello().session;
@@ -185,5 +215,105 @@ describe('room and session flow', () => {
     assert.equal(room.replays.length, 1);
     assert.equal(service.replay(first.token, room.game!.handId).handId, room.game!.handId);
     assert.throws(() => service.newHand(first.token), /整局已经结束/);
+  });
+
+  it('keeps a busted member at the table as a spectator without exposing private cards', () => {
+    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
+    const host = service.hello().session;
+    const room = service.createRoom(host.token, {
+      ...roomRequest('Alice'),
+      maxPlayers: 3,
+      botCount: 1,
+      gameMode: 'POINTS',
+      rebuyEnabled: true,
+    });
+    const busted = service.hello().session;
+    service.joinRoom(busted.token, room.id, 'Bob');
+    service.startGame(host.token);
+
+    room.players.find((player) => player.id === busted.playerId)!.stack = 0;
+    room.handNumber = 2;
+    room.game = createGame({
+      seed: 31,
+      handNumber: room.handNumber,
+      smallBlind: room.smallBlind,
+      bigBlind: room.bigBlind,
+      players: room.players
+        .filter((player) => player.id !== busted.playerId)
+        .map(({ id, name, kind, stack }) => ({ id, name, kind, stack })),
+    });
+
+    const spectator = service.roomView(room.id, busted.playerId);
+    assert.ok(spectator.table);
+    assert.equal(spectator.table.handNumber, 2);
+    assert.equal(spectator.view, undefined);
+    assert.equal(spectator.table.players.some((player) => 'holeCards' in player), false);
+    assert.deepEqual(spectator.table.revealedCards, {});
+  });
+
+  it('applies an approved rebuy at a hand boundary and returns the member next hand', () => {
+    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
+    const host = service.hello().session;
+    const room = service.createRoom(host.token, {
+      ...roomRequest('Alice'),
+      maxPlayers: 3,
+      botCount: 1,
+      gameMode: 'POINTS',
+      rebuyEnabled: true,
+      rebuyAmount: 1000,
+      maxRebuys: 2,
+    });
+    const busted = service.hello().session;
+    service.joinRoom(busted.token, room.id, 'Bob');
+    service.startGame(host.token);
+
+    const bustedPlayer = room.players.find((player) => player.id === busted.playerId)!;
+    bustedPlayer.stack = 0;
+    room.game = createGame({
+      seed: 41,
+      handNumber: room.handNumber,
+      smallBlind: room.smallBlind,
+      bigBlind: room.bigBlind,
+      players: room.players
+        .filter((player) => player.id !== busted.playerId)
+        .map(({ id, name, kind, stack }) => ({ id, name, kind, stack })),
+    });
+
+    service.requestRebuy(busted.token);
+    assert.equal(bustedPlayer.rebuyStatus, 'PENDING');
+    service.resolveRebuy(host.token, busted.playerId, true);
+    assert.equal(bustedPlayer.rebuyStatus, 'APPROVED');
+    assert.equal(bustedPlayer.stack, 0);
+
+    const actorId = room.game.players[room.game.currentPlayerIndex!].id;
+    service.applyForPlayer(room.id, actorId, { type: 'FOLD' });
+    assert.equal(bustedPlayer.stack, 1000);
+    assert.equal(bustedPlayer.buyInTotal, 3000);
+    assert.equal(bustedPlayer.rebuyCount, 1);
+    assert.equal(bustedPlayer.rebuyStatus, 'NONE');
+    assert.equal(room.ledger.filter((entry) => entry.playerId === busted.playerId).map((entry) => entry.type).at(-1), 'REBUY_APPLIED');
+
+    service.advanceHand(room.id);
+    assert.ok(service.roomView(room.id, busted.playerId).view);
+  });
+
+  it('finishes the match after the configured hand limit', () => {
+    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
+    const host = service.hello().session;
+    const room = service.createRoom(host.token, {
+      ...roomRequest('Alice'),
+      gameMode: 'POINTS',
+      maxHands: 1,
+    });
+    const second = service.hello().session;
+    service.joinRoom(second.token, room.id, 'Bob');
+    service.startGame(host.token);
+
+    const actorId = room.game!.players[room.game!.currentPlayerIndex!].id;
+    service.applyForPlayer(room.id, actorId, { type: 'FOLD' });
+
+    assert.equal(room.handNumber, 1);
+    assert.equal(room.status, 'FINISHED');
+    assert.equal(service.roomView(room.id, host.playerId).table?.phase, 'FINISHED');
   });
 });

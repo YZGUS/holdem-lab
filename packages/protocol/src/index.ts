@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import type { HandReplay, PlayerView } from '@holdem/core';
+import type { HandReplay, PlayerView, TableView } from '@holdem/core';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('FOLD') }),
@@ -24,12 +24,19 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
     smallBlind: z.number().int().min(1).max(10_000),
     bigBlind: z.number().int().min(2).max(20_000),
     turnSeconds: z.number().int().min(10).max(120),
+    gameMode: z.enum(['POINTS', 'TOURNAMENT']),
+    maxHands: z.number().int().min(1).max(1_000).nullable(),
+    rebuyEnabled: z.boolean(),
+    rebuyAmount: z.number().int().min(100).max(100_000),
+    maxRebuys: z.number().int().min(1).max(20).nullable(),
   }),
   z.object({ type: z.literal('JOIN_ROOM'), roomId: z.string().min(4).max(12), playerName: z.string().trim().min(1).max(16) }),
   z.object({ type: z.literal('LEAVE_ROOM') }),
   z.object({ type: z.literal('LEAVE_TABLE') }),
   z.object({ type: z.literal('RETURN_ROOM') }),
   z.object({ type: z.literal('DISBAND_ROOM') }),
+  z.object({ type: z.literal('REQUEST_REBUY') }),
+  z.object({ type: z.literal('RESOLVE_REBUY'), playerId: z.string().min(1).max(100), approved: z.boolean() }),
   z.object({ type: z.literal('START_GAME') }),
   z.object({
     type: z.literal('ACTION'),
@@ -52,6 +59,8 @@ export type ClientMessage = z.infer<typeof clientMessageSchema>;
 
 export type RoomStatus = 'WAITING' | 'PLAYING' | 'PAUSED' | 'FINISHED';
 export type RoomPresence = 'AT_TABLE' | 'AWAY';
+export type GameMode = 'POINTS' | 'TOURNAMENT';
+export type RebuyStatus = 'NONE' | 'PENDING' | 'APPROVED';
 
 export interface RoomPlayerView {
   id: string;
@@ -61,6 +70,9 @@ export interface RoomPlayerView {
   stack: number;
   connected: boolean;
   presence: RoomPresence;
+  buyInTotal: number;
+  rebuyCount: number;
+  rebuyStatus: RebuyStatus;
 }
 
 export interface ReplaySummary {
@@ -79,6 +91,8 @@ export interface RoomSummary {
   botCount: number;
   smallBlind: number;
   bigBlind: number;
+  gameMode: GameMode;
+  maxHands: number | null;
   membership: RoomPresence | null;
 }
 
@@ -88,8 +102,20 @@ export interface RoomView extends RoomSummary {
   startingStack: number;
   turnSeconds: number;
   turnDeadline: number | null;
+  rebuyEnabled: boolean;
+  rebuyAmount: number;
+  maxRebuys: number | null;
   players: RoomPlayerView[];
   replays: ReplaySummary[];
+  ledger: RoomLedgerEntry[];
+}
+
+export interface RoomLedgerEntry {
+  index: number;
+  type: 'INITIAL_BUY_IN' | 'REBUY_REQUESTED' | 'REBUY_APPROVED' | 'REBUY_REJECTED' | 'REBUY_APPLIED';
+  playerId: string;
+  amount?: number;
+  text: string;
 }
 
 export interface SessionView {
@@ -112,8 +138,8 @@ export interface SimulationReport {
 export type ServerMessage =
   | { type: 'WELCOME'; session: SessionView; resumed: boolean }
   | { type: 'LOBBY'; session: SessionView; rooms: RoomSummary[] }
-  | { type: 'ROOM'; room: RoomView; view?: PlayerView }
+  | { type: 'ROOM'; room: RoomView; table?: TableView; view?: PlayerView }
   | { type: 'ROOM_CLOSED'; roomId: string; message: string }
   | { type: 'REPLAY'; replay: HandReplay }
   | { type: 'SIMULATION_RESULT'; result: SimulationReport }
-  | { type: 'ERROR'; message: string; view?: PlayerView };
+  | { type: 'ERROR'; message: string; table?: TableView; view?: PlayerView };

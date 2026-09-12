@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyAction, createGame, evaluateHand, exportReplay, foldPlayer, legalActions, potStructure, replayHand, type GameState, type PlayerAction } from './index';
+import { applyAction, createGame, evaluateHand, exportReplay, foldPlayer, legalActions, playerView, potStructure, replayHand, tableView, type GameState, type PlayerAction } from './index';
 
 function createTwoPlayerGame(seed: number, handNumber = 1, stacks: [number, number] = [2000, 2000]) {
   return createGame({
@@ -19,6 +19,19 @@ function act(state: GameState, action: PlayerAction) {
 }
 
 describe('heads-up rules', () => {
+  it('separates the public table from the private player view', () => {
+    const state = createTwoPlayerGame(13);
+    const publicTable = tableView(state);
+    const privateView = playerView(state, 'p1');
+
+    expect(publicTable.players.some((player) => 'holeCards' in player)).toBe(false);
+    expect(publicTable.revealedCards).toEqual({});
+    expect(publicTable.handNumber).toBe(1);
+    expect('players' in privateView).toBe(false);
+    expect(privateView.holeCards).toEqual(state.players[0].holeCards);
+    expect(privateView.viewerId).toBe('p1');
+  });
+
   it('describes the ranks that make a pair or two pair', () => {
     expect(evaluateHand(['As', 'Ah', '9c', '6d', '3s']).description).toBe('一对 A');
     expect(evaluateHand(['Ks', 'Kh', 'Jc', 'Jd', '3s']).description).toBe('两对 K、J');

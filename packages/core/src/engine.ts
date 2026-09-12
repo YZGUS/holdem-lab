@@ -1,7 +1,7 @@
 import { compareScores, evaluateHand } from './evaluator.js';
 import type {
   ApplyResult, Card, CreateGameOptions, DecisionContext, GameEvent, GameState, LegalActions,
-  Phase, PlayerAction, PlayerState, PlayerView, PotSummary, Rank, Suit,
+  Phase, PlayerAction, PlayerState, PlayerView, PotSummary, Rank, Suit, TableView,
 } from './types.js';
 
 const ranks: Rank[] = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A'];
@@ -368,14 +368,17 @@ function publicPlayers(state: GameState) {
   return state.players.map(({ holeCards: _cards, acted: _acted, lastActionBet: _lastActionBet, ...player }) => player);
 }
 
+function visiblePots(state: GameState) {
+  const structuredPots = potStructure(state);
+  const hasAllInContribution = state.players.some((player) => player.inHand && !player.folded && player.allIn && player.handBet > 0);
+  return hasAllInContribution
+    ? structuredPots
+    : state.pot > 0 ? [{ amount: state.pot, eligiblePlayerIds: activePlayers(state).map((player) => player.id) }] : [];
+}
+
 export function decisionContext(state: GameState, playerId: string): DecisionContext {
   const playerIndex = state.players.findIndex((player) => player.id === playerId);
   if (playerIndex < 0) throw new Error('玩家不存在');
-  const structuredPots = potStructure(state);
-  const hasAllInContribution = state.players.some((player) => player.inHand && !player.folded && player.allIn && player.handBet > 0);
-  const visiblePots = hasAllInContribution
-    ? structuredPots
-    : state.pot > 0 ? [{ amount: state.pot, eligiblePlayerIds: activePlayers(state).map((player) => player.id) }] : [];
   return {
     handId: state.handId,
     version: state.version,
@@ -384,19 +387,25 @@ export function decisionContext(state: GameState, playerId: string): DecisionCon
     holeCards: [...state.players[playerIndex].holeCards],
     board: [...state.board],
     pot: state.pot,
-    pots: visiblePots,
+    pots: visiblePots(state),
     players: publicPlayers(state),
     legalActions: legalActions(state, playerIndex),
     recentHistory: state.history.slice(-40),
   };
 }
 
-export function playerView(state: GameState, playerId: string): PlayerView {
-  const context = decisionContext(state, playerId);
+export function tableView(state: GameState): TableView {
   const reachedShowdown = state.phase === 'FINISHED' && activePlayers(state).length > 1;
   return {
-    ...context,
-    viewerId: playerId,
+    handId: state.handId,
+    handNumber: state.setup.handNumber,
+    version: state.version,
+    phase: state.phase,
+    board: [...state.board],
+    pot: state.pot,
+    pots: visiblePots(state),
+    players: publicPlayers(state),
+    recentHistory: state.history.slice(-40),
     currentPlayerId: state.currentPlayerIndex === null ? null : state.players[state.currentPlayerIndex].id,
     dealerId: state.players[state.dealerIndex].id,
     smallBlindId: state.players[state.smallBlindIndex].id,
@@ -405,5 +414,17 @@ export function playerView(state: GameState, playerId: string): PlayerView {
     resultText: state.resultText,
     revealedCards: reachedShowdown ? Object.fromEntries(activePlayers(state).map((player) => [player.id, [...player.holeCards]])) : {},
     handRanks: reachedShowdown ? clone(state.handRanks) : {},
+  };
+}
+
+export function playerView(state: GameState, playerId: string): PlayerView {
+  const playerIndex = state.players.findIndex((player) => player.id === playerId);
+  if (playerIndex < 0) throw new Error('玩家不存在');
+  return {
+    viewerId: playerId,
+    handId: state.handId,
+    version: state.version,
+    holeCards: [...state.players[playerIndex].holeCards],
+    legalActions: legalActions(state, playerIndex),
   };
 }
