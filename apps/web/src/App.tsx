@@ -58,6 +58,7 @@ export function App() {
       onJoin={client.joinRoom}
       onReturn={client.returnRoom}
       onRefresh={client.refreshRooms}
+      onDismissNotice={client.clearNotice}
     />;
   }
   if (client.room.status === 'WAITING' || !client.table) {
@@ -71,6 +72,7 @@ export function App() {
     connection={client.connection}
     busy={client.busy}
     notice={client.notice}
+    onDismissNotice={client.clearNotice}
     onAction={client.submitAction}
     onLeave={client.leaveTable}
     onDisband={client.disbandRoom}

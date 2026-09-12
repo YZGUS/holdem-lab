@@ -3,16 +3,32 @@ import type { HandReplay, PlayerAction, PlayerView, TableView } from '@holdem/co
 import { PROTOCOL_VERSION, type ClientMessage, type RoomSummary, type RoomView, type ServerMessage, type SessionView, type SimulationReport } from '@holdem/protocol';
 
 const sessionKey = 'holdem-lab-session';
+let actionSequence = 0;
+
+function createActionId() {
+  const random = new Uint32Array(2);
+  globalThis.crypto?.getRandomValues?.(random);
+  actionSequence = (actionSequence + 1) % Number.MAX_SAFE_INTEGER;
+  return `action-${Date.now().toString(36)}-${random[0].toString(36)}${random[1].toString(36)}-${actionSequence.toString(36)}`;
+}
+
+export interface ClientNotice {
+  id: number;
+  message: string;
+  tone: 'info' | 'error';
+}
 
 function websocketUrl() {
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL as string;
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  return import.meta.env.DEV ? `${protocol}://${window.location.hostname}:8787` : `${protocol}://${window.location.host}`;
+  return `${protocol}://${window.location.host}/ws`;
 }
 
 export function useGameClient() {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef(0);
+  const noticeTimerRef = useRef(0);
+  const noticeIdRef = useRef(0);
   const pendingActionRef = useRef<{ resolve: (table: TableView) => void; reject: (error: Error) => void; timer: number } | null>(null);
   const [connection, setConnection] = useState<'CONNECTING' | 'OPEN' | 'CLOSED'>('CONNECTING');
   const [session, setSession] = useState<SessionView | null>(null);
@@ -23,10 +39,29 @@ export function useGameClient() {
   const [replay, setReplay] = useState<HandReplay | null>(null);
   const [simulation, setSimulation] = useState<SimulationReport | null>(null);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState<ClientNotice | null>(null);
+
+  const clearNotice = useCallback(() => {
+    window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = 0;
+    setNotice(null);
+  }, []);
+
+  const showNotice = useCallback((message: string, tone: ClientNotice['tone'], duration = 0) => {
+    window.clearTimeout(noticeTimerRef.current);
+    const id = ++noticeIdRef.current;
+    setNotice({ id, message, tone });
+    if (duration > 0) {
+      noticeTimerRef.current = window.setTimeout(() => {
+        setNotice((current) => current?.id === id ? null : current);
+        noticeTimerRef.current = 0;
+      }, duration);
+    }
+  }, []);
 
   useEffect(() => {
     let disposed = false;
+    let initialConnectTimer = 0;
     const connect = () => {
       setConnection('CONNECTING');
       const socket = new WebSocket(websocketUrl());
@@ -51,7 +86,7 @@ export function useGameClient() {
           setTable(message.table ?? null);
           setView(message.view ?? null);
           setSession((current) => current ? { ...current, roomId: message.room.id, roomPresence: 'AT_TABLE' } : current);
-          setNotice('');
+          clearNotice();
           setBusy(false);
           const pending = pendingActionRef.current;
           if (pending && message.table) {
@@ -71,7 +106,7 @@ export function useGameClient() {
           setView(null);
           setReplay(null);
           setSession((current) => current ? { token: current.token, playerId: current.playerId, name: current.name } : current);
-          setNotice(message.message);
+          showNotice(message.message, 'info', 4000);
           setBusy(false);
         } else if (message.type === 'REPLAY') {
           setReplay(message.replay);
@@ -84,7 +119,7 @@ export function useGameClient() {
             setTable(message.table);
             setView(message.view ?? null);
           }
-          setNotice(message.message);
+          showNotice(message.message, 'error', 6000);
           setBusy(false);
           const pending = pendingActionRef.current;
           if (pending) {
@@ -100,48 +135,61 @@ export function useGameClient() {
         reconnectRef.current = window.setTimeout(connect, 1200);
       };
     };
-    connect();
+    // Defer the first side effect so React StrictMode can complete its
+    // development-only setup/cleanup pass without opening a disposable socket.
+    initialConnectTimer = window.setTimeout(connect, 0);
     return () => {
       disposed = true;
+      window.clearTimeout(initialConnectTimer);
       window.clearTimeout(reconnectRef.current);
-      socketRef.current?.close();
+      const socket = socketRef.current;
+      socketRef.current = null;
+      if (socket && socket.readyState !== WebSocket.CLOSED) socket.close();
     };
-  }, []);
+  }, [clearNotice, showNotice]);
+
+  useEffect(() => () => window.clearTimeout(noticeTimerRef.current), []);
 
   const send = useCallback((message: ClientMessage, showBusy = true) => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      setNotice('正在重新连接服务');
+      showNotice('游戏服务正在重新连接', 'error', 5000);
       return false;
     }
     if (showBusy) setBusy(true);
-    setNotice('');
+    clearNotice();
     socket.send(JSON.stringify(message));
     return true;
-  }, []);
+  }, [clearNotice, showNotice]);
 
   const submitAction = useCallback((action: PlayerAction) => new Promise<TableView>((resolve, reject) => {
     if (!table || !view || table.currentPlayerId !== view.viewerId) {
-      reject(new Error('现在没有轮到你行动'));
+      const error = new Error('现在没有轮到你行动，牌桌状态可能仍在同步');
+      showNotice(error.message, 'error', 5000);
+      reject(error);
       return;
     }
     if (pendingActionRef.current) {
-      reject(new Error('上一动作仍在确认'));
+      const error = new Error('上一动作仍在确认');
+      showNotice(error.message, 'error', 5000);
+      reject(error);
       return;
     }
     const timer = window.setTimeout(() => {
       pendingActionRef.current = null;
       setBusy(false);
-      reject(new Error('等待牌桌确认超时'));
+      const error = new Error('等待牌桌确认超时，请检查游戏服务连接');
+      showNotice(error.message, 'error', 6000);
+      reject(error);
     }, 6000);
     pendingActionRef.current = { resolve, reject, timer };
-    const sent = send({ type: 'ACTION', actionId: crypto.randomUUID(), handId: table.handId, expectedVersion: table.version, action });
+    const sent = send({ type: 'ACTION', actionId: createActionId(), handId: table.handId, expectedVersion: table.version, action });
     if (!sent) {
       window.clearTimeout(timer);
       pendingActionRef.current = null;
       reject(new Error('牌桌尚未连接'));
     }
-  }), [send, table, view]);
+  }), [send, showNotice, table, view]);
 
   const leaveRoom = useCallback(() => {
     if (send({ type: 'LEAVE_ROOM' })) {
@@ -166,7 +214,7 @@ export function useGameClient() {
   return {
     connection, session, rooms, room, table, view, replay, simulation, busy, notice,
     clearReplay: () => setReplay(null),
-    clearNotice: () => setNotice(''),
+    clearNotice,
     refreshRooms: () => send({ type: 'LIST_ROOMS' }, false),
     createRoom: (message: Omit<Extract<ClientMessage, { type: 'CREATE_ROOM' }>, 'type'>) => send({ type: 'CREATE_ROOM', ...message }),
     joinRoom: (roomId: string, playerName: string) => send({ type: 'JOIN_ROOM', roomId, playerName }),

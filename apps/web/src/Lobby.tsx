@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { ClientMessage, GameMode, RoomSummary, SessionView } from '@holdem/protocol';
+import type { ClientNotice } from './useGameClient';
 
 type CreateRoomConfig = Omit<Extract<ClientMessage, { type: 'CREATE_ROOM' }>, 'type'>;
 
@@ -8,13 +9,14 @@ interface LobbyProps {
   session: SessionView | null;
   rooms: RoomSummary[];
   busy: boolean;
-  notice: string;
+  notice: ClientNotice | null;
   onCreate: (config: CreateRoomConfig) => void;
   onJoin: (roomId: string, playerName: string) => void;
   onReturn: () => void;
   onRefresh: () => void;
+  onDismissNotice: () => void;
 }
-export function Lobby({ connection, session, rooms, busy, notice, onCreate, onJoin, onReturn, onRefresh }: LobbyProps) {
+export function Lobby({ connection, session, rooms, busy, notice, onCreate, onJoin, onReturn, onRefresh, onDismissNotice }: LobbyProps) {
   const [playerName, setPlayerName] = useState(() => sessionStorage.getItem('holdem-lab-name') ?? session?.name ?? '玩家');
   const [roomName, setRoomName] = useState('周末牌局');
   const [roomCode, setRoomCode] = useState('');
@@ -107,7 +109,7 @@ export function Lobby({ connection, session, rooms, busy, notice, onCreate, onJo
         </div>
       </section>
     </section>
-    {notice && <div className="toast error" role="alert">{notice}</div>}
+    {notice && <div className={`toast ${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}><span>{notice.message}</span><button aria-label="关闭提示" onClick={onDismissNotice}>×</button></div>}
     <footer className="lobby-footer">会话 {session?.playerId.slice(-6) ?? '建立中'} · 当前页面刷新后可自动恢复</footer>
   </main>;
 }

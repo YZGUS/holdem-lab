@@ -46,7 +46,7 @@ const httpServer = createServer(async (request, response) => {
     }
   }
 });
-const server = new WebSocketServer({ server: httpServer });
+const server = new WebSocketServer({ server: httpServer, path: '/ws' });
 const clientTokens = new Map<WebSocket, string>();
 const tokenClients = new Map<string, WebSocket>();
 const turnTimers = new Map<string, ReturnType<typeof setTimeout>>();
