@@ -9,10 +9,11 @@ interface LobbyProps {
   notice: string;
   onCreate: (config: { roomName: string; playerName: string; maxPlayers: number; botCount: number; startingStack: number; smallBlind: number; bigBlind: number; turnSeconds: number }) => void;
   onJoin: (roomId: string, playerName: string) => void;
+  onReturn: () => void;
   onRefresh: () => void;
 }
 
-export function Lobby({ connection, session, rooms, busy, notice, onCreate, onJoin, onRefresh }: LobbyProps) {
+export function Lobby({ connection, session, rooms, busy, notice, onCreate, onJoin, onReturn, onRefresh }: LobbyProps) {
   const [playerName, setPlayerName] = useState(() => sessionStorage.getItem('holdem-lab-name') ?? session?.name ?? '玩家');
   const [roomName, setRoomName] = useState('周末牌局');
   const [roomCode, setRoomCode] = useState('');
@@ -45,19 +46,22 @@ export function Lobby({ connection, session, rooms, busy, notice, onCreate, onJo
           <label>座位数<select value={maxPlayers} onChange={(event) => setMaxPlayers(Number(event.target.value))}>{[2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value} value={value}>{value} 人桌</option>)}</select></label>
           <label>Bot 数量<select value={Math.min(botCount, maxPlayers - 1)} onChange={(event) => setBotCount(Number(event.target.value))}>{Array.from({ length: maxPlayers }, (_, value) => <option key={value} value={value}>{value}</option>)}</select></label>
         </div>
-        <button className="primary wide" disabled={busy || connection !== 'OPEN'}>创建并入座</button>
+        <button className="primary wide" disabled={busy || connection !== 'OPEN' || Boolean(session?.roomId)}>{session?.roomId ? '请先返回原牌桌' : '创建并入座'}</button>
       </form>
 
       <section className="panel rooms-panel">
         <div className="panel-heading"><div><span>局域网大厅</span><h2>加入现有房间</h2></div><button className="text-button" onClick={onRefresh}>刷新</button></div>
-        <div className="join-code"><input aria-label="房间码" placeholder="输入 6 位房间码" maxLength={6} value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} /><button disabled={busy || roomCode.trim().length < 4} onClick={() => join(roomCode)}>加入</button></div>
+        <div className="join-code"><input aria-label="房间码" placeholder="输入 6 位房间码" maxLength={6} value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} /><button disabled={busy || Boolean(session?.roomId) || roomCode.trim().length < 4} onClick={() => join(roomCode)}>加入</button></div>
         <div className="room-list">
           {rooms.length === 0 && <div className="empty-state"><strong>暂无公开房间</strong><span>创建后，同一局域网内的设备即可加入。</span></div>}
-          {rooms.map((room) => <article key={room.id} className="room-row">
+          {rooms.map((room) => {
+            const canReturn = room.membership === 'AWAY';
+            const label = canReturn ? '返回牌桌' : room.membership === 'AT_TABLE' ? '牌桌中' : room.status === 'WAITING' ? '加入' : room.status === 'PAUSED' ? '已暂停' : room.status === 'FINISHED' ? '已结束' : '进行中';
+            return <article key={room.id} className="room-row">
             <div><strong>{room.name}</strong><span>#{room.id} · {room.smallBlind}/{room.bigBlind} · {room.botCount} Bot</span></div>
             <span>{room.playerCount}/{room.maxPlayers}</span>
-            <button disabled={busy || room.status !== 'WAITING'} onClick={() => join(room.id)}>{room.status === 'WAITING' ? '加入' : room.status === 'FINISHED' ? '已结束' : '进行中'}</button>
-          </article>)}
+            <button disabled={busy || (!canReturn && (Boolean(session?.roomId) || room.status !== 'WAITING'))} onClick={() => canReturn ? onReturn() : join(room.id)}>{label}</button>
+          </article>})}
         </div>
       </section>
 

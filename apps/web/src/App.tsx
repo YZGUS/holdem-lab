@@ -53,11 +53,12 @@ export function App() {
       notice={client.notice}
       onCreate={client.createRoom}
       onJoin={client.joinRoom}
+      onReturn={client.returnRoom}
       onRefresh={client.refreshRooms}
     />;
   }
   if (client.room.status === 'WAITING' || !client.view) {
-    return <WaitingRoom room={client.room} connection={client.connection} busy={client.busy} onStart={client.startGame} onLeave={client.leaveRoom} />;
+    return <WaitingRoom room={client.room} connection={client.connection} busy={client.busy} onStart={client.startGame} onLeave={client.room.status === 'WAITING' ? client.leaveRoom : client.leaveTable} onDisband={client.disbandRoom} />;
   }
   return <PokerTable
     room={client.room}
@@ -67,7 +68,8 @@ export function App() {
     busy={client.busy}
     notice={client.notice}
     onAction={client.submitAction}
-    onLeave={client.leaveRoom}
+    onLeave={client.leaveTable}
+    onDisband={client.disbandRoom}
     onGetReplay={client.getReplay}
     onClearReplay={client.clearReplay}
   />;

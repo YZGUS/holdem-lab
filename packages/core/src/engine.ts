@@ -340,6 +340,30 @@ export function applyAction(source: GameState, action: PlayerAction): ApplyResul
   return { ok: true, state };
 }
 
+/** Apply a canonical fold when a player deliberately leaves the table. */
+export function foldPlayer(source: GameState, playerId: string): ApplyResult {
+  const playerIndex = source.players.findIndex((player) => player.id === playerId);
+  if (playerIndex < 0) return { ok: false, state: source, error: '玩家不存在' };
+  if (source.phase === 'FINISHED') return { ok: true, state: source };
+  const sourcePlayer = source.players[playerIndex];
+  if (!sourcePlayer.inHand || sourcePlayer.folded) return { ok: true, state: source };
+  if (source.currentPlayerIndex === playerIndex) return applyAction(source, { type: 'FOLD' });
+
+  const state = clone(source);
+  const player = state.players[playerIndex];
+  const action: PlayerAction = { type: 'FOLD' };
+  player.folded = true;
+  player.acted = true;
+  player.lastActionBet = state.currentBet;
+  addEvent(state, { type: 'PLAYER_ACTION', playerId, action, text: `${player.name} 弃牌` });
+  state.actions.push({ index: state.actions.length, playerId, action });
+
+  if (activePlayers(state).length === 1) settleUncontested(state);
+  else advanceOrShowdown(state);
+  state.version += 1;
+  return { ok: true, state };
+}
+
 function publicPlayers(state: GameState) {
   return state.players.map(({ holeCards: _cards, acted: _acted, lastActionBet: _lastActionBet, ...player }) => player);
 }

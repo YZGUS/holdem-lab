@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyAction, createGame, evaluateHand, exportReplay, legalActions, potStructure, replayHand, type GameState, type PlayerAction } from './index';
+import { applyAction, createGame, evaluateHand, exportReplay, foldPlayer, legalActions, potStructure, replayHand, type GameState, type PlayerAction } from './index';
 
 function createTwoPlayerGame(seed: number, handNumber = 1, stacks: [number, number] = [2000, 2000]) {
   return createGame({
@@ -80,6 +80,28 @@ describe('heads-up rules', () => {
     expect(replayed.players.map((player) => player.stack)).toEqual(state.players.map((player) => player.stack));
     expect(replayed.winnerIds).toEqual(state.winnerIds);
     expect(replayed.actions).toEqual(state.actions);
+  });
+
+  it('records and replays a fold caused by leaving the table out of turn', () => {
+    let state = createGame({
+      seed: 23,
+      dealerIndex: 0,
+      players: [
+        { id: 'p1', name: '一号', kind: 'HUMAN', stack: 2000 },
+        { id: 'p2', name: '二号', kind: 'HUMAN', stack: 2000 },
+        { id: 'p3', name: '三号', kind: 'BOT', stack: 2000 },
+      ],
+    });
+    expect(state.players[state.currentPlayerIndex!].id).toBe('p1');
+    const folded = foldPlayer(state, 'p2');
+    expect(folded.ok).toBe(true);
+    state = folded.state;
+    expect(state.players.find((player) => player.id === 'p2')?.folded).toBe(true);
+    state = act(state, { type: 'FOLD' });
+
+    const replayed = replayHand(exportReplay(state));
+    expect(replayed.actions).toEqual(state.actions);
+    expect(replayed.players.map((player) => player.stack)).toEqual(state.players.map((player) => player.stack));
   });
 
   it('returns the unmatched part of a bet before awarding an uncontested pot', () => {

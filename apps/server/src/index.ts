@@ -7,13 +7,13 @@ import { decisionContext, type PlayerAction } from '@holdem/core';
 import { createDefaultStrategyRegistry, runSimulation } from '@holdem/bot';
 import { clientMessageSchema, type ServerMessage } from '@holdem/protocol';
 import { JsonFilePersistence } from './persistence.js';
-import { RoomService, type StoredServerState } from './room-service.js';
+import { RoomService, type PersistedServerState } from './room-service.js';
 
 const port = Number(process.env.PORT ?? 8787);
 const workspaceRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const dataFile = process.env.HOLDEM_DATA_FILE ?? join(workspaceRoot, '.data', 'server-state.json');
 const webDist = process.env.HOLDEM_WEB_DIST ?? join(workspaceRoot, 'apps', 'web', 'dist');
-const service = new RoomService(new JsonFilePersistence<StoredServerState>(dataFile));
+const service = new RoomService(new JsonFilePersistence<PersistedServerState>(dataFile));
 const strategies = createDefaultStrategyRegistry();
 const mimeTypes: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 const httpServer = createServer(async (request, response) => {
@@ -56,29 +56,30 @@ function send(client: WebSocket, message: ServerMessage) {
   if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(message));
 }
 
-function sendLobby(client: WebSocket) {
-  send(client, { type: 'LOBBY', rooms: service.listRooms() });
+function sendLobby(client: WebSocket, sessionToken: string) {
+  const session = service.session(sessionToken);
+  if (session) send(client, { type: 'LOBBY', session: service.sessionView(sessionToken), rooms: service.listRooms(session.playerId) });
 }
 
 function sendRoom(client: WebSocket, roomId: string, playerId: string) {
   try {
     send(client, { type: 'ROOM', ...service.roomView(roomId, playerId) });
   } catch {
-    sendLobby(client);
+    const sessionToken = clientTokens.get(client);
+    if (sessionToken) sendLobby(client, sessionToken);
   }
 }
 
 function broadcastLobby() {
   for (const [client, sessionToken] of clientTokens) {
-    const session = service.session(sessionToken);
-    if (!session?.roomId) sendLobby(client);
+    if (!service.isAtTable(sessionToken)) sendLobby(client, sessionToken);
   }
 }
 
 function broadcastRoom(roomId: string) {
   for (const [client, sessionToken] of clientTokens) {
     const session = service.session(sessionToken);
-    if (session?.roomId === roomId) sendRoom(client, roomId, session.playerId);
+    if (session?.roomId === roomId && service.isAtTable(sessionToken)) sendRoom(client, roomId, session.playerId);
   }
 }
 
@@ -94,7 +95,30 @@ function scheduleRoom(roomId: string) {
   if (previous) clearTimeout(previous);
   turnTimers.delete(roomId);
   const room = service.rooms.get(roomId);
-  if (room?.status === 'PLAYING' && room.game?.phase === 'FINISHED') {
+  if (!room) return;
+  const expiresAt = service.roomEngine.expiresAt(room);
+  if (expiresAt !== null) {
+    const timer = setTimeout(() => {
+      turnTimers.delete(roomId);
+      const closed = service.expireInactiveRoom(roomId);
+      if (!closed) {
+        if (service.rooms.has(roomId)) scheduleRoom(roomId);
+        return;
+      }
+      closed.memberTokens.forEach((token) => {
+        const memberClient = tokenClients.get(token);
+        if (memberClient) send(memberClient, { type: 'ROOM_CLOSED', roomId, message: '房间因长时间无人在线已关闭' });
+      });
+      broadcastLobby();
+    }, Math.max(0, expiresAt - Date.now()));
+    turnTimers.set(roomId, timer);
+    return;
+  }
+  if (room.status !== 'PLAYING') {
+    if (room.turnDeadline !== null) service.setTurnDeadline(roomId, null);
+    return;
+  }
+  if (room.game?.phase === 'FINISHED') {
     const expectedHandId = room.game.handId;
     service.setTurnDeadline(roomId, null);
     const timer = setTimeout(() => {
@@ -122,7 +146,7 @@ function scheduleRoom(roomId: string) {
   }
   const expectedHandId = actor.room.game.handId;
   const expectedVersion = actor.room.game.version;
-  const delay = actor.player.kind === 'BOT' ? 550 : actor.room.turnSeconds * 1000;
+  const delay = actor.player.kind === 'BOT' ? 550 : actor.player.connected ? actor.room.turnSeconds * 1000 : 3_000;
   service.setTurnDeadline(roomId, Date.now() + delay);
   const timer = setTimeout(async () => {
     turnTimers.delete(roomId);
@@ -173,30 +197,31 @@ server.on('connection', (client) => {
       send(client, { type: 'ERROR', message: '消息参数无效' });
       return;
     }
-    const message = parsed.data;
+      const message = parsed.data;
     try {
       if (message.type === 'HELLO') {
-        const welcome = service.hello(message.sessionToken);
-        const existingClient = tokenClients.get(welcome.session.token);
+        const hello = service.hello(message.sessionToken);
+        const existingClient = tokenClients.get(hello.session.token);
         if (existingClient && existingClient !== client) existingClient.close(4001, '会话已在新连接恢复');
-        clientTokens.set(client, welcome.session.token);
-        tokenClients.set(welcome.session.token, client);
-        service.markConnected(welcome.session.token, true);
-        send(client, { type: 'WELCOME', ...welcome });
-        if (welcome.session.roomId) {
-          sendRoom(client, welcome.session.roomId, welcome.session.playerId);
-          if (!turnTimers.has(welcome.session.roomId)) scheduleRoom(welcome.session.roomId);
-          broadcastRoom(welcome.session.roomId);
+        clientTokens.set(client, hello.session.token);
+        tokenClients.set(hello.session.token, client);
+        const affectedRoom = service.setConnected(hello.session.token, true);
+        const session = service.sessionView(hello.session.token);
+        send(client, { type: 'WELCOME', session, resumed: hello.resumed });
+        if (session.roomId && session.roomPresence === 'AT_TABLE') {
+          sendRoom(client, session.roomId, session.playerId);
+          broadcastRoom(session.roomId);
         } else {
-          sendLobby(client);
+          sendLobby(client, session.token);
         }
+        if (affectedRoom) scheduleRoom(affectedRoom.id);
         broadcastLobby();
         return;
       }
       const sessionToken = clientTokens.get(client);
       if (!sessionToken) throw new Error('请先建立会话');
       if (message.type === 'LIST_ROOMS') {
-        sendLobby(client);
+        sendLobby(client, sessionToken);
       } else if (message.type === 'CREATE_ROOM') {
         const room = service.createRoom(sessionToken, message);
         broadcastRoom(room.id);
@@ -206,15 +231,38 @@ server.on('connection', (client) => {
         broadcastRoom(room.id);
         broadcastLobby();
       } else if (message.type === 'LEAVE_ROOM') {
-        const previousRoomId = service.session(sessionToken)?.roomId;
-        service.leaveRoom(sessionToken);
-        if (previousRoomId && service.rooms.has(previousRoomId)) broadcastRoom(previousRoomId);
-        else if (previousRoomId) {
-          const timer = turnTimers.get(previousRoomId);
+        const result = service.leaveRoom(sessionToken);
+        if (result.room) {
+          scheduleRoom(result.roomId);
+          broadcastRoom(result.roomId);
+        } else {
+          const timer = turnTimers.get(result.roomId);
           if (timer) clearTimeout(timer);
-          turnTimers.delete(previousRoomId);
+          turnTimers.delete(result.roomId);
         }
-        sendLobby(client);
+        sendLobby(client, sessionToken);
+        broadcastLobby();
+      } else if (message.type === 'LEAVE_TABLE') {
+        const room = service.leaveTable(sessionToken);
+        scheduleRoom(room.id);
+        broadcastRoom(room.id);
+        sendLobby(client, sessionToken);
+        broadcastLobby();
+      } else if (message.type === 'RETURN_ROOM') {
+        const room = service.returnToRoom(sessionToken);
+        scheduleRoom(room.id);
+        sendRoom(client, room.id, service.session(sessionToken)!.playerId);
+        broadcastRoom(room.id);
+        broadcastLobby();
+      } else if (message.type === 'DISBAND_ROOM') {
+        const closed = service.disbandRoom(sessionToken);
+        const timer = turnTimers.get(closed.roomId);
+        if (timer) clearTimeout(timer);
+        turnTimers.delete(closed.roomId);
+        closed.memberTokens.forEach((token) => {
+          const memberClient = tokenClients.get(token);
+          if (memberClient) send(memberClient, { type: 'ROOM_CLOSED', roomId: closed.roomId, message: '房主已解散房间' });
+        });
         broadcastLobby();
       } else if (message.type === 'START_GAME') {
         const room = service.startGame(sessionToken);
@@ -247,17 +295,18 @@ server.on('connection', (client) => {
     const roomId = service.session(sessionToken)?.roomId;
     clientTokens.delete(client);
     tokenClients.delete(sessionToken);
-    service.markConnected(sessionToken, false);
-    if (roomId) broadcastRoom(roomId);
+    service.setConnected(sessionToken, false);
+    if (roomId) {
+      scheduleRoom(roomId);
+      broadcastRoom(roomId);
+    }
     broadcastLobby();
   });
 });
 
 httpServer.on('listening', () => {
   console.log(`Holdem server listening on http://0.0.0.0:${port}`);
-  service.rooms.forEach((room) => {
-    if (room.status === 'PLAYING') scheduleRoom(room.id);
-  });
+  service.rooms.forEach((room) => scheduleRoom(room.id));
 });
 
 httpServer.listen(port, '0.0.0.0');

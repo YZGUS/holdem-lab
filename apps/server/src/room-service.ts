@@ -1,10 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import {
-  applyAction, createGame, exportReplay, playerView, type GameState, type HandReplay,
+  applyAction, createGame, exportReplay, foldPlayer, playerView, type GameState, type HandReplay,
   type PlayerAction, type PlayerProfile, type PlayerView,
 } from '@holdem/core';
-import type { ClientMessage, ReplaySummary, RoomSummary, RoomView, SessionView } from '@holdem/protocol';
+import type {
+  ClientMessage, ReplaySummary, RoomPresence, RoomStatus, RoomSummary, RoomView, SessionView,
+} from '@holdem/protocol';
 import type { PersistenceAdapter } from './persistence.js';
+import { RoomEngine } from './room-engine.js';
 
 type CreateRoomMessage = Extract<ClientMessage, { type: 'CREATE_ROOM' }>;
 
@@ -22,6 +25,7 @@ interface RoomPlayer {
   seat: number;
   stack: number;
   connected: boolean;
+  presence: RoomPresence;
   sessionToken?: string;
   strategyId?: string;
 }
@@ -29,7 +33,7 @@ interface RoomPlayer {
 export interface RoomRecord {
   id: string;
   name: string;
-  status: 'WAITING' | 'PLAYING' | 'FINISHED';
+  status: RoomStatus;
   hostPlayerId: string;
   maxPlayers: number;
   startingStack: number;
@@ -37,6 +41,8 @@ export interface RoomRecord {
   bigBlind: number;
   turnSeconds: number;
   turnDeadline: number | null;
+  inactiveSince: number | null;
+  pauseReason: 'NO_ONLINE_HUMAN' | 'NOT_ENOUGH_PLAYERS' | null;
   players: RoomPlayer[];
   game?: GameState;
   handNumber: number;
@@ -48,11 +54,31 @@ interface StoredRoom extends Omit<RoomRecord, 'handledActionIds'> {
   handledActionIds: string[];
 }
 
+interface LegacyRoomPlayer extends Omit<RoomPlayer, 'presence'> {
+  presence?: RoomPresence;
+  left?: boolean;
+}
+
+interface LegacyStoredRoom extends Omit<StoredRoom, 'players' | 'inactiveSince' | 'pauseReason' | 'status'> {
+  status: Exclude<RoomStatus, 'PAUSED'>;
+  players: LegacyRoomPlayer[];
+  inactiveSince?: number | null;
+  pauseReason?: RoomRecord['pauseReason'];
+}
+
 export interface StoredServerState {
-  schemaVersion: 1;
+  schemaVersion: 2;
   sessions: SessionRecord[];
   rooms: StoredRoom[];
 }
+
+export interface LegacyStoredServerState {
+  schemaVersion: 1;
+  sessions: SessionRecord[];
+  rooms: LegacyStoredRoom[];
+}
+
+export type PersistedServerState = StoredServerState | LegacyStoredServerState;
 
 const botNames = ['Nova', 'Ada', 'Turing', 'River', 'Atlas', 'Echo', 'Iris'];
 
@@ -72,24 +98,57 @@ export class RoomService {
   readonly rooms = new Map<string, RoomRecord>();
   readonly sessions = new Map<string, SessionRecord>();
 
-  constructor(private readonly persistence: PersistenceAdapter<StoredServerState>) {
+  constructor(
+    private readonly persistence: PersistenceAdapter<PersistedServerState>,
+    readonly roomEngine = new RoomEngine(),
+    private readonly now: () => number = Date.now,
+  ) {
     const stored = persistence.load();
-    if (stored?.schemaVersion === 1) {
-      stored.sessions.forEach((session) => this.sessions.set(session.token, session));
-      stored.rooms.forEach((room) => this.rooms.set(room.id, {
-        ...room,
+    if (!stored || (stored.schemaVersion !== 1 && stored.schemaVersion !== 2)) return;
+
+    stored.sessions.forEach((session) => this.sessions.set(session.token, session));
+    stored.rooms.forEach((storedRoom) => {
+      const players = storedRoom.players
+        .filter((player) => !('left' in player && player.left))
+        .map((player) => ({
+          id: player.id,
+          name: player.name,
+          kind: player.kind,
+          seat: player.seat,
+          stack: player.stack,
+          connected: player.kind === 'BOT',
+          presence: player.presence ?? 'AT_TABLE',
+          ...(player.sessionToken ? { sessionToken: player.sessionToken } : {}),
+          ...(player.strategyId ? { strategyId: player.strategyId } : {}),
+        }));
+      const room: RoomRecord = {
+        ...storedRoom,
+        status: storedRoom.status,
         turnDeadline: null,
-        players: room.players.map((player) => ({ ...player, connected: player.kind === 'BOT' })),
-        handledActionIds: new Set(room.handledActionIds),
-      }));
-    }
+        inactiveSince: storedRoom.inactiveSince ?? null,
+        pauseReason: storedRoom.pauseReason ?? null,
+        players,
+        handledActionIds: new Set(storedRoom.handledActionIds),
+      };
+      this.roomEngine.reconcile(room, this.now());
+      this.rooms.set(room.id, room);
+    });
+    this.sessions.forEach((session) => {
+      if (!session.roomId) return;
+      const room = this.rooms.get(session.roomId);
+      if (!room?.players.some((player) => player.id === session.playerId)) session.roomId = undefined;
+    });
+    if (stored.schemaVersion === 1) this.save();
   }
 
   private save() {
     this.persistence.save({
-      schemaVersion: 1,
+      schemaVersion: 2,
       sessions: clone([...this.sessions.values()]),
-      rooms: [...this.rooms.values()].map((room) => ({ ...clone(room), handledActionIds: [...room.handledActionIds] })),
+      rooms: [...this.rooms.values()].map((room) => ({
+        ...clone(room),
+        handledActionIds: [...room.handledActionIds],
+      })),
     });
   }
 
@@ -100,36 +159,60 @@ export class RoomService {
         existing.roomId = undefined;
         this.save();
       }
-      return { session: this.sessionView(existing), resumed: true };
+      return { session: this.sessionViewRecord(existing), resumed: true };
     }
     const session: SessionRecord = { token: token(), playerId: `player-${token(8)}`, name: '玩家' };
     this.sessions.set(session.token, session);
     this.save();
-    return { session: this.sessionView(session), resumed: false };
+    return { session: this.sessionViewRecord(session), resumed: false };
   }
 
-  private sessionView(session: SessionRecord): SessionView {
-    return { token: session.token, playerId: session.playerId, name: session.name, ...(session.roomId ? { roomId: session.roomId } : {}) };
+  private sessionViewRecord(session: SessionRecord): SessionView {
+    if (!session.roomId) return { token: session.token, playerId: session.playerId, name: session.name };
+    const room = this.rooms.get(session.roomId);
+    const player = room?.players.find((item) => item.id === session.playerId);
+    if (!player) return { token: session.token, playerId: session.playerId, name: session.name };
+    return {
+      token: session.token,
+      playerId: session.playerId,
+      name: session.name,
+      roomId: room!.id,
+      roomPresence: player.presence,
+    };
+  }
+
+  sessionView(sessionToken: string) {
+    return this.sessionViewRecord(this.requireSession(sessionToken));
   }
 
   session(sessionToken: string) {
     return this.sessions.get(sessionToken);
   }
 
-  markConnected(sessionToken: string, connected: boolean) {
+  isAtTable(sessionToken: string) {
     const session = this.sessions.get(sessionToken);
-    if (!session?.roomId) return;
+    if (!session?.roomId) return false;
+    const room = this.rooms.get(session.roomId);
+    return room ? this.roomEngine.isAtTable(room, session.playerId) : false;
+  }
+
+  setConnected(sessionToken: string, connected: boolean) {
+    const session = this.sessions.get(sessionToken);
+    if (!session?.roomId) return null;
     const room = this.rooms.get(session.roomId);
     const player = room?.players.find((item) => item.id === session.playerId);
-    if (player) {
-      player.connected = connected;
-      this.save();
-    }
+    if (!room || !player) return null;
+    this.roomEngine.apply(room, {
+      type: connected ? 'PLAYER_CONNECTED' : 'PLAYER_DISCONNECTED',
+      playerId: player.id,
+    }, this.now());
+    this.save();
+    return room;
   }
 
   createRoom(sessionToken: string, message: CreateRoomMessage) {
     const session = this.requireSession(sessionToken);
-    if (session.roomId) throw new Error('请先离开当前房间');
+    if (session.roomId) throw new Error('你已经属于一个房间，请先返回或解散原房间');
     if (message.botCount >= message.maxPlayers) throw new Error('至少要保留一个真人座位');
     if (message.smallBlind >= message.bigBlind || message.startingStack < message.bigBlind * 10) throw new Error('盲注或起始筹码设置不合理');
     let id = roomCode();
@@ -143,6 +226,7 @@ export class RoomService {
       seat: 0,
       stack: message.startingStack,
       connected: true,
+      presence: 'AT_TABLE',
       sessionToken,
     }];
     for (let index = 0; index < message.botCount; index += 1) {
@@ -153,6 +237,7 @@ export class RoomService {
         seat: index + 1,
         stack: message.startingStack,
         connected: true,
+        presence: 'AT_TABLE',
         strategyId: 'basic-check-call',
       });
     }
@@ -167,6 +252,8 @@ export class RoomService {
       bigBlind: message.bigBlind,
       turnSeconds: message.turnSeconds,
       turnDeadline: null,
+      inactiveSince: null,
+      pauseReason: null,
       players,
       handNumber: 0,
       replays: [],
@@ -179,38 +266,98 @@ export class RoomService {
 
   joinRoom(sessionToken: string, roomId: string, playerName: string) {
     const session = this.requireSession(sessionToken);
-    if (session.roomId) throw new Error('请先离开当前房间');
+    if (session.roomId) throw new Error('你已经属于一个房间，请先返回原房间');
     const room = this.requireRoom(roomId.toUpperCase());
-    if (room.status !== 'WAITING') throw new Error('牌局已经开始，只能使用原会话重连');
+    if (room.status !== 'WAITING') throw new Error('牌局已经开始，只能由原成员返回');
     if (room.players.length >= room.maxPlayers) throw new Error('房间已满');
-    const seat = Array.from({ length: room.maxPlayers }, (_, index) => index).find((index) => !room.players.some((player) => player.seat === index));
+    const seat = Array.from({ length: room.maxPlayers }, (_, index) => index)
+      .find((index) => !room.players.some((player) => player.seat === index));
     if (seat === undefined) throw new Error('没有可用座位');
     session.name = playerName;
     session.roomId = room.id;
-    room.players.push({ id: session.playerId, name: playerName, kind: 'HUMAN', seat, stack: room.startingStack, connected: true, sessionToken });
+    room.players.push({
+      id: session.playerId,
+      name: playerName,
+      kind: 'HUMAN',
+      seat,
+      stack: room.startingStack,
+      connected: true,
+      presence: 'AT_TABLE',
+      sessionToken,
+    });
     room.players.sort((left, right) => left.seat - right.seat);
+    this.roomEngine.reconcile(room, this.now());
     this.save();
     return room;
   }
 
   leaveRoom(sessionToken: string) {
-    const session = this.requireSession(sessionToken);
-    if (!session.roomId) return null;
-    const room = this.rooms.get(session.roomId);
+    const { room, session } = this.requireMembership(sessionToken);
+    if (room.status !== 'WAITING') throw new Error('牌局进行中请使用离桌，座位和筹码会保留');
+    const roomId = room.id;
+    room.players = room.players.filter((player) => player.id !== session.playerId);
     session.roomId = undefined;
-    if (!room) {
+    const humans = room.players.filter((player) => player.kind === 'HUMAN');
+    if (!humans.length) {
+      const closed = this.closeRoom(roomId);
       this.save();
-      return null;
+      return { roomId, room: null, memberTokens: closed.memberTokens };
     }
-    const player = room.players.find((item) => item.id === session.playerId);
-    if (room.status === 'WAITING') room.players = room.players.filter((item) => item.id !== session.playerId);
-    else if (player) player.connected = false;
-    const humans = room.players.filter((item) => item.kind === 'HUMAN');
-    const connectedHumans = humans.filter((item) => item.connected);
-    if (!connectedHumans.length) this.rooms.delete(room.id);
-    else if (room.hostPlayerId === session.playerId) room.hostPlayerId = connectedHumans[0].id;
+    if (room.hostPlayerId === session.playerId) room.hostPlayerId = humans[0].id;
+    this.roomEngine.reconcile(room, this.now());
+    this.save();
+    return { roomId, room, memberTokens: [] };
+  }
+
+  leaveTable(sessionToken: string) {
+    const { room, session, player } = this.requireMembership(sessionToken);
+    if (room.status === 'WAITING') throw new Error('等待开局时请离开房间');
+    if (player.presence === 'AWAY') return room;
+
+    if (room.game && room.game.phase !== 'FINISHED') {
+      const result = foldPlayer(room.game, session.playerId);
+      if (!result.ok) throw new Error(result.error);
+      room.game = result.state;
+      this.syncStacks(room);
+      this.archiveFinishedHand(room);
+    }
+    this.roomEngine.apply(room, { type: 'PLAYER_LEFT_TABLE', playerId: session.playerId }, this.now());
     this.save();
     return room;
+  }
+
+  returnToRoom(sessionToken: string) {
+    const { room, session } = this.requireMembership(sessionToken);
+    this.roomEngine.apply(room, { type: 'PLAYER_RETURNED', playerId: session.playerId }, this.now());
+    this.save();
+    return room;
+  }
+
+  disbandRoom(sessionToken: string) {
+    const { room, session } = this.requireMembership(sessionToken);
+    if (room.hostPlayerId !== session.playerId) throw new Error('只有房主可以解散房间');
+    const closed = this.closeRoom(room.id);
+    this.save();
+    return closed;
+  }
+
+  expireInactiveRoom(roomId: string) {
+    const room = this.rooms.get(roomId);
+    if (!room || !this.roomEngine.shouldExpire(room, this.now())) return null;
+    const closed = this.closeRoom(room.id);
+    this.save();
+    return closed;
+  }
+
+  private closeRoom(roomId: string) {
+    const memberTokens = [...this.sessions.values()]
+      .filter((member) => member.roomId === roomId)
+      .map((member) => member.token);
+    this.sessions.forEach((member) => {
+      if (member.roomId === roomId) member.roomId = undefined;
+    });
+    this.rooms.delete(roomId);
+    return { roomId, memberTokens };
   }
 
   startGame(sessionToken: string) {
@@ -219,7 +366,9 @@ export class RoomService {
     if (room.status !== 'WAITING') throw new Error('牌局已经开始');
     if (room.players.length < 2) throw new Error('至少需要两名玩家');
     room.status = 'PLAYING';
+    room.pauseReason = null;
     this.dealNewHand(room, 0);
+    this.roomEngine.reconcile(room, this.now());
     this.save();
     return room;
   }
@@ -233,17 +382,33 @@ export class RoomService {
   advanceHand(roomId: string) {
     const room = this.requireRoom(roomId);
     if (room.status === 'FINISHED') throw new Error('整局已经结束');
+    if (room.status !== 'PLAYING') throw new Error('房间已暂停');
     if (!room.game || room.game.phase !== 'FINISHED') throw new Error('当前手牌尚未结束');
-    const nextDealer = (room.game.dealerIndex + 1) % room.players.length;
-    this.dealNewHand(room, nextDealer);
+    const previousDealerId = room.game.players[room.game.dealerIndex].id;
+    const previousDealerSeat = room.players.find((player) => player.id === previousDealerId)?.seat ?? -1;
+    const eligiblePlayers = this.eligiblePlayers(room);
+    if (eligiblePlayers.length < 2) {
+      this.roomEngine.reconcile(room, this.now());
+      this.save();
+      return room;
+    }
+    const nextDealerPlayer = eligiblePlayers.find((player) => player.seat > previousDealerSeat) ?? eligiblePlayers[0];
+    this.dealNewHand(room, eligiblePlayers.findIndex((player) => player.id === nextDealerPlayer.id));
     this.save();
     return room;
+  }
+
+  private eligiblePlayers(room: RoomRecord) {
+    return room.players
+      .filter((player) => player.stack > 0 && (player.kind === 'BOT' || player.presence === 'AT_TABLE'))
+      .sort((left, right) => left.seat - right.seat);
   }
 
   private dealNewHand(room: RoomRecord, dealerIndex: number) {
     room.handNumber += 1;
     room.handledActionIds.clear();
-    const profiles: PlayerProfile[] = room.players.map(({ id, name, kind, stack }) => ({ id, name, kind, stack }));
+    const profiles: PlayerProfile[] = this.eligiblePlayers(room)
+      .map(({ id, name, kind, stack }) => ({ id, name, kind, stack }));
     room.game = createGame({
       seed: randomBytes(4).readUInt32LE(0),
       handNumber: room.handNumber,
@@ -257,7 +422,9 @@ export class RoomService {
   }
 
   act(sessionToken: string, message: Extract<ClientMessage, { type: 'ACTION' }>) {
-    const { room, session } = this.requireMembership(sessionToken);
+    const { room, session, player } = this.requireMembership(sessionToken);
+    if (player.presence !== 'AT_TABLE') throw new Error('请先返回牌桌');
+    if (room.status !== 'PLAYING') throw new Error('房间已暂停');
     if (room.handledActionIds.has(message.actionId)) return room;
     if (!room.game) throw new Error('牌局尚未开始');
     if (message.handId !== room.game.handId || message.expectedVersion !== room.game.version) throw new Error('牌局已经推进，已刷新当前状态');
@@ -269,6 +436,7 @@ export class RoomService {
 
   applyForPlayer(roomId: string, playerId: string, action: PlayerAction) {
     const room = this.requireRoom(roomId);
+    if (room.status !== 'PLAYING') throw new Error('房间已暂停');
     if (!room.game || room.game.currentPlayerIndex === null) throw new Error('当前没有玩家需要行动');
     if (room.game.players[room.game.currentPlayerIndex].id !== playerId) throw new Error('现在还没轮到你');
     const result = applyAction(room.game, action);
@@ -289,10 +457,11 @@ export class RoomService {
   }
 
   private archiveFinishedHand(room: RoomRecord) {
-    if (!room.game || room.game.phase !== 'FINISHED' || room.replays.some((replay) => replay.handId === room.game!.handId)) return;
-    room.replays.push(exportReplay(room.game));
+    if (!room.game || room.game.phase !== 'FINISHED') return;
+    if (!room.replays.some((replay) => replay.handId === room.game!.handId)) room.replays.push(exportReplay(room.game));
     if (room.players.filter((player) => player.stack > 0).length < 2) {
       room.status = 'FINISHED';
+      room.pauseReason = null;
       room.turnDeadline = null;
     }
   }
@@ -313,27 +482,32 @@ export class RoomService {
 
   currentActor(roomId: string) {
     const room = this.requireRoom(roomId);
-    if (!room.game || room.game.currentPlayerIndex === null) return null;
+    if (room.status !== 'PLAYING' || !room.game || room.game.currentPlayerIndex === null) return null;
     const gamePlayer = room.game.players[room.game.currentPlayerIndex];
-    return { room, player: room.players.find((item) => item.id === gamePlayer.id)!, gamePlayer };
+    const player = room.players.find((item) => item.id === gamePlayer.id);
+    return player ? { room, player, gamePlayer } : null;
   }
 
-  listRooms(): RoomSummary[] {
-    return [...this.rooms.values()].map((room) => ({
-      id: room.id,
-      name: room.name,
-      status: room.status,
-      playerCount: room.players.length,
-      maxPlayers: room.maxPlayers,
-      botCount: room.players.filter((player) => player.kind === 'BOT').length,
-      smallBlind: room.smallBlind,
-      bigBlind: room.bigBlind,
-    }));
+  listRooms(viewerPlayerId?: string): RoomSummary[] {
+    return [...this.rooms.values()].map((room) => {
+      const member = viewerPlayerId ? room.players.find((player) => player.id === viewerPlayerId) : undefined;
+      return {
+        id: room.id,
+        name: room.name,
+        status: room.status,
+        playerCount: room.players.length,
+        maxPlayers: room.maxPlayers,
+        botCount: room.players.filter((player) => player.kind === 'BOT').length,
+        smallBlind: room.smallBlind,
+        bigBlind: room.bigBlind,
+        membership: member?.presence ?? null,
+      };
+    });
   }
 
   roomView(roomId: string, viewerPlayerId: string): { room: RoomView; view?: PlayerView } {
     const room = this.requireRoom(roomId);
-    const summary = this.listRooms().find((item) => item.id === roomId)!;
+    const summary = this.listRooms(viewerPlayerId).find((item) => item.id === roomId)!;
     const replays: ReplaySummary[] = room.replays.map((replay) => ({
       handId: replay.handId,
       handNumber: replay.setup.handNumber,
@@ -347,10 +521,17 @@ export class RoomService {
       startingStack: room.startingStack,
       turnSeconds: room.turnSeconds,
       turnDeadline: room.turnDeadline,
-      players: room.players.map(({ id, name, kind, seat, stack, connected }) => ({ id, name, kind, seat, stack, connected })),
+      players: room.players.map(({ id, name, kind, seat, stack, connected, presence }) => ({
+        id, name, kind, seat, stack, connected, presence,
+      })),
       replays,
     };
-    return { room: roomView, ...(room.game?.players.some((player) => player.id === viewerPlayerId) ? { view: playerView(room.game, viewerPlayerId) } : {}) };
+    return {
+      room: roomView,
+      ...(room.game?.players.some((player) => player.id === viewerPlayerId)
+        ? { view: playerView(room.game, viewerPlayerId) }
+        : {}),
+    };
   }
 
   private requireSession(sessionToken: string) {
@@ -369,7 +550,8 @@ export class RoomService {
     const session = this.requireSession(sessionToken);
     if (!session.roomId) throw new Error('你还没有加入房间');
     const room = this.requireRoom(session.roomId);
-    if (!room.players.some((player) => player.id === session.playerId)) throw new Error('你不在这个房间');
-    return { room, session };
+    const player = room.players.find((item) => item.id === session.playerId && item.kind === 'HUMAN');
+    if (!player) throw new Error('你不在这个房间');
+    return { room, session, player };
   }
 }

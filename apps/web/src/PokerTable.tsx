@@ -29,6 +29,7 @@ interface PokerTableProps {
   notice: string;
   onAction: (action: PlayerAction) => Promise<PlayerView>;
   onLeave: () => void;
+  onDisband: () => void;
   onGetReplay: (handId: string) => void;
   onClearReplay: () => void;
 }
@@ -52,7 +53,7 @@ function downloadReplay(replay: HandReplay) {
   URL.revokeObjectURL(url);
 }
 
-export function PokerTable({ room, view, replay, connection, busy, notice, onAction, onLeave, onGetReplay, onClearReplay }: PokerTableProps) {
+export function PokerTable({ room, view, replay, connection, busy, notice, onAction, onLeave, onDisband, onGetReplay, onClearReplay }: PokerTableProps) {
   const [drawer, setDrawer] = useState<'history' | 'ranks' | 'replays' | null>(null);
   const [raiseOpen, setRaiseOpen] = useState(false);
   const [raiseTo, setRaiseTo] = useState(40);
@@ -122,6 +123,7 @@ export function PokerTable({ room, view, replay, connection, busy, notice, onAct
   }
   const currentPlayer = displayView.players.find((player) => player.id === displayView.currentPlayerId);
   const remaining = !replay && room.turnDeadline ? Math.max(0, Math.ceil((room.turnDeadline - now) / 1000)) : null;
+  const isHost = room.hostPlayerId === room.viewerPlayerId;
   const mainAction = legal.types.includes('CHECK')
     ? { label: '过牌', action: { type: 'CHECK' } as PlayerAction }
     : { label: `跟注 ${legal.callAmount}`, action: { type: 'CALL' } as PlayerAction };
@@ -133,11 +135,14 @@ export function PokerTable({ room, view, replay, connection, busy, notice, onAct
     sessionStorage.setItem('holdem-card-theme', next);
     return next;
   });
+  const disband = () => {
+    if (window.confirm('确定解散房间？当前牌局将立即结束，所有玩家都会返回大厅。')) onDisband();
+  };
 
   return <main className="game-shell" data-card-theme={cardTheme}>
     <header className="topbar">
       <div><p className="eyebrow">HOLDEM LAB · #{room.id}</p><h1>{room.name}</h1></div>
-      <div className="table-meta" aria-label="牌桌信息"><span>{room.playerCount} 人桌</span><span>盲注 {room.smallBlind}/{room.bigBlind}</span><span className={`status-pill ${connection.toLowerCase()}`}>{connection === 'OPEN' ? '已连接' : '正在重连'}</span><button className="ghost compact theme-toggle" onClick={toggleCardTheme}>卡面：{cardTheme === 'classic' ? '经典' : '高对比'}</button><button className="ghost compact" onClick={onLeave}>离桌</button></div>
+      <div className="table-meta" aria-label="牌桌信息"><span>{room.playerCount} 人桌</span><span>盲注 {room.smallBlind}/{room.bigBlind}</span><span className={`status-pill ${connection.toLowerCase()}`}>{connection === 'OPEN' ? '已连接' : '正在重连'}</span><button className="ghost compact theme-toggle" onClick={toggleCardTheme}>卡面：{cardTheme === 'classic' ? '经典' : '高对比'}</button>{isHost && <button className="ghost compact danger" disabled={busy} onClick={disband}>解散</button>}<button className="ghost compact" onClick={onLeave}>离桌</button></div>
     </header>
 
     <section className="play-area" aria-label="德州扑克牌桌">
@@ -158,7 +163,7 @@ export function PokerTable({ room, view, replay, connection, busy, notice, onAct
             <div className="seat-cards">{ownCards ? ownCards.map((card) => <CardFace card={card} key={card} />) : player.inHand ? <><CardFace card="2s" hidden /><CardFace card="3s" hidden /></> : null}</div>
             <div className="seat-card">
               <div className={`avatar ${player.kind.toLowerCase()}`}>{player.kind === 'BOT' ? 'AI' : player.id === displayView.viewerId ? '你' : player.name[0]}</div>
-              <div><strong>{player.id === displayView.viewerId ? '你' : player.name}</strong><small>{player.kind === 'BOT' ? 'Bot' : '玩家'}{player.folded ? ' · 已弃牌' : player.allIn ? ' · All-in' : roomPlayer && !roomPlayer.connected ? ' · 离线' : ''}</small></div>
+              <div><strong>{player.id === displayView.viewerId ? '你' : player.name}</strong><small>{player.kind === 'BOT' ? 'Bot' : '玩家'}{roomPlayer?.presence === 'AWAY' ? ' · 暂离' : player.folded ? ' · 已弃牌' : player.allIn ? ' · All-in' : roomPlayer && !roomPlayer.connected ? ' · 离线' : ''}</small></div>
               <span>{player.stack.toLocaleString()}</span>
             </div>
             {roles.length > 0 && <div className="position-badges" aria-label={`${player.name}的位置`}>{roles.map((role) => <span key={role}>{role}</span>)}</div>}

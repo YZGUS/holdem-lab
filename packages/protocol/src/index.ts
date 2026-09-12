@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { HandReplay, PlayerView } from '@holdem/core';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('FOLD') }),
@@ -27,6 +27,9 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('JOIN_ROOM'), roomId: z.string().min(4).max(12), playerName: z.string().trim().min(1).max(16) }),
   z.object({ type: z.literal('LEAVE_ROOM') }),
+  z.object({ type: z.literal('LEAVE_TABLE') }),
+  z.object({ type: z.literal('RETURN_ROOM') }),
+  z.object({ type: z.literal('DISBAND_ROOM') }),
   z.object({ type: z.literal('START_GAME') }),
   z.object({
     type: z.literal('ACTION'),
@@ -47,7 +50,8 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
 
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 
-export type RoomStatus = 'WAITING' | 'PLAYING' | 'FINISHED';
+export type RoomStatus = 'WAITING' | 'PLAYING' | 'PAUSED' | 'FINISHED';
+export type RoomPresence = 'AT_TABLE' | 'AWAY';
 
 export interface RoomPlayerView {
   id: string;
@@ -56,6 +60,7 @@ export interface RoomPlayerView {
   seat: number;
   stack: number;
   connected: boolean;
+  presence: RoomPresence;
 }
 
 export interface ReplaySummary {
@@ -74,6 +79,7 @@ export interface RoomSummary {
   botCount: number;
   smallBlind: number;
   bigBlind: number;
+  membership: RoomPresence | null;
 }
 
 export interface RoomView extends RoomSummary {
@@ -91,6 +97,7 @@ export interface SessionView {
   playerId: string;
   name: string;
   roomId?: string;
+  roomPresence?: RoomPresence;
 }
 
 export interface SimulationReport {
@@ -104,8 +111,9 @@ export interface SimulationReport {
 
 export type ServerMessage =
   | { type: 'WELCOME'; session: SessionView; resumed: boolean }
-  | { type: 'LOBBY'; rooms: RoomSummary[] }
+  | { type: 'LOBBY'; session: SessionView; rooms: RoomSummary[] }
   | { type: 'ROOM'; room: RoomView; view?: PlayerView }
+  | { type: 'ROOM_CLOSED'; roomId: string; message: string }
   | { type: 'REPLAY'; replay: HandReplay }
   | { type: 'SIMULATION_RESULT'; result: SimulationReport }
   | { type: 'ERROR'; message: string; view?: PlayerView };

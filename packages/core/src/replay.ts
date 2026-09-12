@@ -1,4 +1,4 @@
-import { applyAction, createGame } from './engine.js';
+import { applyAction, createGame, foldPlayer } from './engine.js';
 import type { GameState, HandReplay } from './types.js';
 
 function clone<T>(value: T): T {
@@ -21,8 +21,11 @@ export function replayHand(replay: HandReplay, actionCount = replay.actions.leng
   let state = createGame({ ...clone(replay.setup), players: clone(replay.setup.players) });
   for (const recorded of replay.actions.slice(0, Math.max(0, actionCount))) {
     const current = state.currentPlayerIndex === null ? null : state.players[state.currentPlayerIndex];
-    if (!current || current.id !== recorded.playerId) throw new Error(`回放动作顺序无效：${recorded.playerId}`);
-    const result = applyAction(state, recorded.action);
+    const result = current?.id === recorded.playerId
+      ? applyAction(state, recorded.action)
+      : recorded.action.type === 'FOLD'
+        ? foldPlayer(state, recorded.playerId)
+        : { ok: false as const, state, error: `动作顺序无效：${recorded.playerId}` };
     if (!result.ok) throw new Error(`回放动作无效：${result.error}`);
     state = result.state;
   }

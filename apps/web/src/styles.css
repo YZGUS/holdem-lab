@@ -25,6 +25,7 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 .wide { width: 100%; min-height: 3.15rem; border: 1px solid var(--line); border-radius: .8rem; font-weight: 700; }
 .ghost { padding: .5rem .8rem; color: #c8d2cc; border: 1px solid var(--line); border-radius: .65rem; background: #ffffff08; }
 .ghost.compact { padding: .42rem .7rem; }
+.ghost.danger { color: #f2aaa2; border-color: #e4776d55; background: #421b194d; }
 .status-pill { display: inline-flex; align-items: center; gap: .42rem; width: max-content; padding: .48rem .72rem; color: #c9d3cd; border: 1px solid var(--line); border-radius: 999px; background: #ffffff08; font-size: .8rem; white-space: nowrap; }
 .status-pill::before { content: ""; width: .42rem; height: .42rem; border-radius: 50%; background: #819087; }
 .status-pill.open::before { background: var(--green); }

@@ -42,12 +42,13 @@ export function useGameClient() {
           sessionStorage.setItem(sessionKey, message.session.token);
           setSession(message.session);
         } else if (message.type === 'LOBBY') {
+          setSession(message.session);
           setRooms(message.rooms);
           setBusy(false);
         } else if (message.type === 'ROOM') {
           setRoom(message.room);
           setView(message.view ?? null);
-          setSession((current) => current ? { ...current, roomId: message.room.id } : current);
+          setSession((current) => current ? { ...current, roomId: message.room.id, roomPresence: 'AT_TABLE' } : current);
           setNotice('');
           setBusy(false);
           const pending = pendingActionRef.current;
@@ -56,6 +57,19 @@ export function useGameClient() {
             pendingActionRef.current = null;
             pending.resolve(message.view);
           }
+        } else if (message.type === 'ROOM_CLOSED') {
+          const pending = pendingActionRef.current;
+          if (pending) {
+            window.clearTimeout(pending.timer);
+            pendingActionRef.current = null;
+            pending.reject(new Error(message.message));
+          }
+          setRoom(null);
+          setView(null);
+          setReplay(null);
+          setSession((current) => current ? { token: current.token, playerId: current.playerId, name: current.name } : current);
+          setNotice(message.message);
+          setBusy(false);
         } else if (message.type === 'REPLAY') {
           setReplay(message.replay);
           setBusy(false);
@@ -132,6 +146,15 @@ export function useGameClient() {
     }
   }, [send]);
 
+  const leaveTable = useCallback(() => {
+    if (send({ type: 'LEAVE_TABLE' })) {
+      setRoom(null);
+      setView(null);
+      setReplay(null);
+      setSession((current) => current ? { ...current, roomPresence: 'AWAY' } : current);
+    }
+  }, [send]);
+
   return {
     connection, session, rooms, room, view, replay, simulation, busy, notice,
     clearReplay: () => setReplay(null),
@@ -139,7 +162,10 @@ export function useGameClient() {
     refreshRooms: () => send({ type: 'LIST_ROOMS' }, false),
     createRoom: (message: Omit<Extract<ClientMessage, { type: 'CREATE_ROOM' }>, 'type'>) => send({ type: 'CREATE_ROOM', ...message }),
     joinRoom: (roomId: string, playerName: string) => send({ type: 'JOIN_ROOM', roomId, playerName }),
+    returnRoom: () => send({ type: 'RETURN_ROOM' }),
     leaveRoom,
+    leaveTable,
+    disbandRoom: () => send({ type: 'DISBAND_ROOM' }),
     startGame: () => send({ type: 'START_GAME' }),
     newHand: () => send({ type: 'NEW_HAND' }),
     submitAction,
