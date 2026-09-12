@@ -67,6 +67,7 @@ export interface PotSummary {
 export interface HandRank {
   category: number;
   name: string;
+  description: string;
   bestFive: Card[];
   score: number[];
 }

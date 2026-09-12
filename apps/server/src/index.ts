@@ -50,6 +50,7 @@ const server = new WebSocketServer({ server: httpServer });
 const clientTokens = new Map<WebSocket, string>();
 const tokenClients = new Map<string, WebSocket>();
 const turnTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const nextHandDelay = 2_500;
 
 function send(client: WebSocket, message: ServerMessage) {
   if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(message));
@@ -92,6 +93,28 @@ function scheduleRoom(roomId: string) {
   const previous = turnTimers.get(roomId);
   if (previous) clearTimeout(previous);
   turnTimers.delete(roomId);
+  const room = service.rooms.get(roomId);
+  if (room?.status === 'PLAYING' && room.game?.phase === 'FINISHED') {
+    const expectedHandId = room.game.handId;
+    service.setTurnDeadline(roomId, null);
+    const timer = setTimeout(() => {
+      turnTimers.delete(roomId);
+      try {
+        const current = service.rooms.get(roomId);
+        if (!current || current.status !== 'PLAYING' || current.game?.handId !== expectedHandId || current.game.phase !== 'FINISHED') return;
+        service.advanceHand(roomId);
+      } catch (error) {
+        console.warn(`自动开始下一手失败：${String(error)}`);
+      }
+      if (service.rooms.has(roomId)) {
+        scheduleRoom(roomId);
+        broadcastRoom(roomId);
+        broadcastLobby();
+      }
+    }, nextHandDelay);
+    turnTimers.set(roomId, timer);
+    return;
+  }
   const actor = service.currentActor(roomId);
   if (!actor?.room.game) {
     service.setTurnDeadline(roomId, null);

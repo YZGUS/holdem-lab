@@ -47,7 +47,7 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
 
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 
-export type RoomStatus = 'WAITING' | 'PLAYING';
+export type RoomStatus = 'WAITING' | 'PLAYING' | 'FINISHED';
 
 export interface RoomPlayerView {
   id: string;

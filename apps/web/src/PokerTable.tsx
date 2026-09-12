@@ -28,7 +28,6 @@ interface PokerTableProps {
   busy: boolean;
   notice: string;
   onAction: (action: PlayerAction) => Promise<PlayerView>;
-  onNewHand: () => void;
   onLeave: () => void;
   onGetReplay: (handId: string) => void;
   onClearReplay: () => void;
@@ -53,7 +52,7 @@ function downloadReplay(replay: HandReplay) {
   URL.revokeObjectURL(url);
 }
 
-export function PokerTable({ room, view, replay, connection, busy, notice, onAction, onNewHand, onLeave, onGetReplay, onClearReplay }: PokerTableProps) {
+export function PokerTable({ room, view, replay, connection, busy, notice, onAction, onLeave, onGetReplay, onClearReplay }: PokerTableProps) {
   const [drawer, setDrawer] = useState<'history' | 'ranks' | 'replays' | null>(null);
   const [raiseOpen, setRaiseOpen] = useState(false);
   const [raiseTo, setRaiseTo] = useState(40);
@@ -123,7 +122,6 @@ export function PokerTable({ room, view, replay, connection, busy, notice, onAct
   }
   const currentPlayer = displayView.players.find((player) => player.id === displayView.currentPlayerId);
   const remaining = !replay && room.turnDeadline ? Math.max(0, Math.ceil((room.turnDeadline - now) / 1000)) : null;
-  const isHost = room.hostPlayerId === room.viewerPlayerId;
   const mainAction = legal.types.includes('CHECK')
     ? { label: '过牌', action: { type: 'CHECK' } as PlayerAction }
     : { label: `跟注 ${legal.callAmount}`, action: { type: 'CALL' } as PlayerAction };
@@ -152,7 +150,7 @@ export function PokerTable({ room, view, replay, connection, busy, notice, onAct
         {displayView.players.map((player, index) => {
           const ownCards = player.id === displayView.viewerId ? displayView.holeCards : displayView.revealedCards[player.id];
           const roomPlayer = room.players.find((item) => item.id === player.id);
-          const role = [player.id === displayView.dealerId ? 'D' : '', player.id === displayView.smallBlindId ? 'SB' : '', player.id === displayView.bigBlindId ? 'BB' : ''].filter(Boolean).join(' · ');
+          const roles = [player.id === displayView.dealerId ? '庄家' : '', player.id === displayView.smallBlindId ? '小盲' : '', player.id === displayView.bigBlindId ? '大盲' : ''].filter(Boolean);
           return <article
             className={`seat ${player.id === displayView.viewerId ? 'hero' : ''} ${player.id === displayView.currentPlayerId ? 'active' : ''} ${player.id === nextPlayerId ? 'next' : ''} ${displayView.winnerIds.includes(player.id) ? 'winner' : ''} ${player.folded ? 'folded' : ''}`}
             style={seatPosition(index, viewerIndex, displayView.players.length)} key={player.id}
@@ -160,10 +158,11 @@ export function PokerTable({ room, view, replay, connection, busy, notice, onAct
             <div className="seat-cards">{ownCards ? ownCards.map((card) => <CardFace card={card} key={card} />) : player.inHand ? <><CardFace card="2s" hidden /><CardFace card="3s" hidden /></> : null}</div>
             <div className="seat-card">
               <div className={`avatar ${player.kind.toLowerCase()}`}>{player.kind === 'BOT' ? 'AI' : player.id === displayView.viewerId ? '你' : player.name[0]}</div>
-              <div><strong>{player.id === displayView.viewerId ? '你' : player.name}</strong><small>{role || '玩家'}{player.folded ? ' · 已弃牌' : player.allIn ? ' · All-in' : roomPlayer && !roomPlayer.connected ? ' · 离线' : ''}</small></div>
+              <div><strong>{player.id === displayView.viewerId ? '你' : player.name}</strong><small>{player.kind === 'BOT' ? 'Bot' : '玩家'}{player.folded ? ' · 已弃牌' : player.allIn ? ' · All-in' : roomPlayer && !roomPlayer.connected ? ' · 离线' : ''}</small></div>
               <span>{player.stack.toLocaleString()}</span>
             </div>
-            {displayView.handRanks[player.id] && <div className="rank-chip">{displayView.handRanks[player.id].name}</div>}
+            {roles.length > 0 && <div className="position-badges" aria-label={`${player.name}的位置`}>{roles.map((role) => <span key={role}>{role}</span>)}</div>}
+            {displayView.handRanks[player.id] && <div className="rank-chip">{displayView.handRanks[player.id].description || displayView.handRanks[player.id].name}</div>}
             {player.streetBet > 0 && <div className="bet-chip">{player.streetBet}</div>}
             {player.id === displayView.currentPlayerId && remaining !== null && <div className={`countdown ${remaining <= 5 ? 'urgent' : ''}`}>{remaining}</div>}
           </article>;
@@ -173,12 +172,12 @@ export function PokerTable({ room, view, replay, connection, busy, notice, onAct
       <nav className="tool-rail" aria-label="辅助信息">
         <button className={drawer === 'ranks' ? 'selected' : ''} onClick={() => toggleDrawer('ranks')}>牌型</button>
         <button className={drawer === 'history' ? 'selected' : ''} onClick={() => toggleDrawer('history')}>记录</button>
-        <button className={drawer === 'replays' ? 'selected' : ''} onClick={() => toggleDrawer('replays')}>回放</button>
+        {room.status === 'FINISHED' && <button className={drawer === 'replays' ? 'selected' : ''} onClick={() => toggleDrawer('replays')}>回放</button>}
       </nav>
       <aside className={`drawer ${drawer ? 'visible' : ''}`} aria-live="polite">
         {drawer === 'history' && <><h2>本手记录</h2><div className="history-list">{[...displayView.recentHistory].reverse().map((entry) => <div key={entry.index}><span>{phaseNames[entry.phase]}</span><p>{entry.text}</p></div>)}</div></>}
         {drawer === 'ranks' && <><h2>牌型大小</h2><ol className="rank-list">{rankExamples.map((rank) => <li key={rank.name}><strong>{rank.name}</strong><div className="rank-example" aria-label={`${rank.name}示例`}>{rank.cards.map((card) => <CardFace card={card} small key={card} />)}</div></li>)}</ol></>}
-        {drawer === 'replays' && <><h2>牌局回放</h2>{room.replays.length === 0 ? <p className="drawer-empty">完成一手后即可回放和导出。</p> : <div className="replay-list">{room.replays.map((item) => <button key={item.handId} onClick={() => onGetReplay(item.handId)}><strong>第 {item.handNumber} 手</strong><span>{item.resultText}</span><small>{item.actionCount} 次动作</small></button>)}</div>}</>}
+        {drawer === 'replays' && <><h2>整局回放</h2><p className="drawer-empty">选择一手查看这一整局的过程。</p><div className="replay-list">{room.replays.map((item) => <button key={item.handId} onClick={() => onGetReplay(item.handId)}><strong>第 {item.handNumber} 手</strong><span>{item.resultText}</span><small>{item.actionCount} 次动作</small></button>)}</div></>}
       </aside>
     </section>
 
@@ -191,9 +190,9 @@ export function PokerTable({ room, view, replay, connection, busy, notice, onAct
         <button onClick={() => downloadReplay(replay)}>导出 JSON</button>
         <button onClick={onClearReplay}>退出回放</button>
       </div> : <>
-        {raiseOpen && legal.minRaiseTo !== null && <div className="raise-panel"><div className="quick-row">{quickRaises.map((item) => <button key={item.label} onClick={() => setRaiseTo(item.value)}>{item.label}</button>)}<button onClick={() => setRaiseTo(legal.maxRaiseTo)}>全下</button></div><label><span>加注到</span><output>{raiseTo.toLocaleString()}</output><input type="range" min={legal.minRaiseTo} max={legal.maxRaiseTo} value={raiseTo} onChange={(event) => setRaiseTo(Number(event.target.value))} /></label><button className="confirm" onClick={() => act({ type: 'RAISE', raiseTo })}>确认加注</button></div>}
-        {displayView.phase === 'FINISHED' ? isHost ? <button className="new-hand" disabled={busy} onClick={onNewHand}>开始下一手</button> : <p className="waiting-note">等待房主开始下一手</p> : <div className="main-actions"><button disabled={!can('FOLD')} onClick={() => act({ type: 'FOLD' })}>弃牌</button><button disabled={!can(mainAction.action.type)} onClick={() => act(mainAction.action)}>{mainAction.label}</button><button className="primary" disabled={!can('RAISE') && !can('ALL_IN')} onClick={() => legal.types.includes('RAISE') ? setRaiseOpen((open) => !open) : act({ type: 'ALL_IN' })}>{thirdLabel}</button></div>}
-        <p className={notice ? 'notice error' : 'notice'}>{notice || (busy ? '正在确认动作…' : displayView.phase === 'FINISHED' ? '本手已结束，可查看记录或回放' : isHeroTurn ? '请选择你的行动' : '等待其他玩家行动')}</p>
+        {raiseOpen && legal.minRaiseTo !== null && <div className="raise-panel" role="dialog" aria-label="加注设置"><div className="quick-row">{quickRaises.map((item) => <button key={item.label} onClick={() => setRaiseTo(item.value)}>{item.label}</button>)}<button onClick={() => setRaiseTo(legal.maxRaiseTo)}>全下</button></div><label><span>加注到</span><output>{raiseTo.toLocaleString()}</output><input type="range" min={legal.minRaiseTo} max={legal.maxRaiseTo} value={raiseTo} onChange={(event) => setRaiseTo(Number(event.target.value))} /></label><button className="confirm" onClick={() => act({ type: 'RAISE', raiseTo })}>确认加注</button></div>}
+        {displayView.phase === 'FINISHED' ? room.status === 'FINISHED' ? <p className="match-finished">整局结束</p> : <p className="auto-next-hand">下一手即将自动开始…</p> : <div className="main-actions"><button disabled={!can('FOLD')} onClick={() => act({ type: 'FOLD' })}>弃牌</button><button disabled={!can(mainAction.action.type)} onClick={() => act(mainAction.action)}>{mainAction.label}</button><button className="primary raise-trigger" disabled={!can('RAISE') && !can('ALL_IN')} onClick={() => legal.types.includes('RAISE') ? setRaiseOpen((open) => !open) : act({ type: 'ALL_IN' })}>{thirdLabel}</button></div>}
+        <p className={notice ? 'notice error' : 'notice'}>{notice || (busy ? '正在确认动作…' : room.status === 'FINISHED' ? '整局已结束，可以查看回放' : displayView.phase === 'FINISHED' ? '正在准备下一手' : isHeroTurn ? '请选择你的行动' : '等待其他玩家行动')}</p>
       </>}
     </footer>
   </main>;

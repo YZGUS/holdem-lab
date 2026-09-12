@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyAction, createGame, exportReplay, legalActions, potStructure, replayHand, type GameState, type PlayerAction } from './index';
+import { applyAction, createGame, evaluateHand, exportReplay, legalActions, potStructure, replayHand, type GameState, type PlayerAction } from './index';
 
 function createTwoPlayerGame(seed: number, handNumber = 1, stacks: [number, number] = [2000, 2000]) {
   return createGame({
@@ -19,6 +19,11 @@ function act(state: GameState, action: PlayerAction) {
 }
 
 describe('heads-up rules', () => {
+  it('describes the ranks that make a pair or two pair', () => {
+    expect(evaluateHand(['As', 'Ah', '9c', '6d', '3s']).description).toBe('一对 A');
+    expect(evaluateHand(['Ks', 'Kh', 'Jc', 'Jd', '3s']).description).toBe('两对 K、J');
+  });
+
   it('plays a deterministic checked hand through showdown without losing chips or duplicating cards', () => {
     let state = createTwoPlayerGame(42);
     state = act(state, { type: 'CALL' });

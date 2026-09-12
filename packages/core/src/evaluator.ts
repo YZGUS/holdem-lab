@@ -3,6 +3,26 @@ import type { Card, HandRank, Rank } from './types.js';
 const ranks: Rank[] = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A'];
 const rankNames = ['高牌', '一对', '两对', '三条', '顺子', '同花', '葫芦', '四条', '同花顺'];
 
+function displayRank(value: number) {
+  return value <= 10 ? String(value) : ['J', 'Q', 'K', 'A'][value - 11];
+}
+
+function describeScore(score: number[], name: string) {
+  if (name === '皇家同花顺') return name;
+  const first = displayRank(score[1]);
+  switch (score[0]) {
+    case 8: return `同花顺 ${first} 高`;
+    case 7: return `四条 ${first}`;
+    case 6: return `葫芦 ${first} 带 ${displayRank(score[2])}`;
+    case 5: return `同花 ${first} 高`;
+    case 4: return `顺子 ${first} 高`;
+    case 3: return `三条 ${first}`;
+    case 2: return `两对 ${first}、${displayRank(score[2])}`;
+    case 1: return `一对 ${first}`;
+    default: return `高牌 ${first}`;
+  }
+}
+
 function rankValue(card: Card) {
   return ranks.indexOf(card[0] as Rank) + 2;
 }
@@ -61,5 +81,5 @@ export function evaluateHand(cards: Card[]): HandRank {
             }
           }
   const name = score[0] === 8 && score[1] === 14 ? '皇家同花顺' : rankNames[score[0]];
-  return { category: score[0], name, bestFive, score };
+  return { category: score[0], name, description: describeScore(score, name), bestFive, score };
 }

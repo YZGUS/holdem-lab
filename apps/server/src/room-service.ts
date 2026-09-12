@@ -29,7 +29,7 @@ interface RoomPlayer {
 export interface RoomRecord {
   id: string;
   name: string;
-  status: 'WAITING' | 'PLAYING';
+  status: 'WAITING' | 'PLAYING' | 'FINISHED';
   hostPlayerId: string;
   maxPlayers: number;
   startingStack: number;
@@ -227,6 +227,12 @@ export class RoomService {
   newHand(sessionToken: string) {
     const { room, session } = this.requireMembership(sessionToken);
     if (room.hostPlayerId !== session.playerId) throw new Error('只有房主可以开始下一手');
+    return this.advanceHand(room.id);
+  }
+
+  advanceHand(roomId: string) {
+    const room = this.requireRoom(roomId);
+    if (room.status === 'FINISHED') throw new Error('整局已经结束');
     if (!room.game || room.game.phase !== 'FINISHED') throw new Error('当前手牌尚未结束');
     const nextDealer = (room.game.dealerIndex + 1) % room.players.length;
     this.dealNewHand(room, nextDealer);
@@ -235,7 +241,6 @@ export class RoomService {
   }
 
   private dealNewHand(room: RoomRecord, dealerIndex: number) {
-    if (room.players.filter((player) => player.stack > 0).length < 2) room.players.forEach((player) => { player.stack = room.startingStack; });
     room.handNumber += 1;
     room.handledActionIds.clear();
     const profiles: PlayerProfile[] = room.players.map(({ id, name, kind, stack }) => ({ id, name, kind, stack }));
@@ -286,11 +291,15 @@ export class RoomService {
   private archiveFinishedHand(room: RoomRecord) {
     if (!room.game || room.game.phase !== 'FINISHED' || room.replays.some((replay) => replay.handId === room.game!.handId)) return;
     room.replays.push(exportReplay(room.game));
-    room.replays = room.replays.slice(-20);
+    if (room.players.filter((player) => player.stack > 0).length < 2) {
+      room.status = 'FINISHED';
+      room.turnDeadline = null;
+    }
   }
 
   replay(sessionToken: string, handId: string) {
     const { room } = this.requireMembership(sessionToken);
+    if (room.status !== 'FINISHED') throw new Error('整局结束后才能查看回放');
     const replay = room.replays.find((item) => item.handId === handId);
     if (!replay) throw new Error('找不到这手回放');
     return clone(replay);
@@ -325,7 +334,7 @@ export class RoomService {
   roomView(roomId: string, viewerPlayerId: string): { room: RoomView; view?: PlayerView } {
     const room = this.requireRoom(roomId);
     const summary = this.listRooms().find((item) => item.id === roomId)!;
-    const replays: ReplaySummary[] = [...room.replays].reverse().map((replay) => ({
+    const replays: ReplaySummary[] = room.replays.map((replay) => ({
       handId: replay.handId,
       handNumber: replay.setup.handNumber,
       resultText: replay.resultText ?? '本手结束',

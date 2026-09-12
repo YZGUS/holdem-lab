@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { createGame } from '@holdem/core';
 import { MemoryPersistence } from './persistence.js';
 import { RoomService, type StoredServerState } from './room-service.js';
 
@@ -58,5 +59,49 @@ describe('room and session flow', () => {
     assert.throws(() => service.act(second.token, {
       type: 'ACTION', actionId: 'wrong-turn', handId: game.handId, expectedVersion: game.version, action: { type: 'CHECK' },
     }), /还没轮到/);
+  });
+
+  it('advances from a finished hand without a host action', () => {
+    const service = new RoomService(new MemoryPersistence<StoredServerState>());
+    const first = service.hello().session;
+    const room = service.createRoom(first.token, roomRequest('Alice'));
+    const second = service.hello().session;
+    service.joinRoom(second.token, room.id, 'Bob');
+    service.startGame(first.token);
+    service.applyForPlayer(room.id, first.playerId, { type: 'FOLD' });
+
+    assert.equal(room.game!.phase, 'FINISHED');
+    service.advanceHand(room.id);
+
+    assert.equal(room.handNumber, 2);
+    assert.equal(room.game!.phase, 'PRE_FLOP');
+  });
+
+  it('ends the whole game after the last funded player wins and only then exposes replays', () => {
+    const service = new RoomService(new MemoryPersistence<StoredServerState>());
+    const first = service.hello().session;
+    const room = service.createRoom(first.token, roomRequest('Alice'));
+    const second = service.hello().session;
+    service.joinRoom(second.token, room.id, 'Bob');
+    service.startGame(first.token);
+
+    room.game = createGame({
+      seed: 2,
+      handNumber: 1,
+      smallBlind: 10,
+      bigBlind: 20,
+      players: [
+        { id: first.playerId, name: 'Alice', kind: 'HUMAN', stack: 100 },
+        { id: second.playerId, name: 'Bob', kind: 'HUMAN', stack: 20 },
+      ],
+    });
+    assert.throws(() => service.replay(first.token, room.game!.handId), /整局结束后/);
+
+    service.applyForPlayer(room.id, first.playerId, { type: 'CALL' });
+
+    assert.equal(room.status, 'FINISHED');
+    assert.equal(room.replays.length, 1);
+    assert.equal(service.replay(first.token, room.game!.handId).handId, room.game!.handId);
+    assert.throws(() => service.newHand(first.token), /整局已经结束/);
   });
 });

@@ -49,13 +49,11 @@ export function App() {
       connection={client.connection}
       session={client.session}
       rooms={client.rooms}
-      simulation={client.simulation}
       busy={client.busy}
       notice={client.notice}
       onCreate={client.createRoom}
       onJoin={client.joinRoom}
       onRefresh={client.refreshRooms}
-      onSimulate={client.runSimulation}
     />;
   }
   if (client.room.status === 'WAITING' || !client.view) {
@@ -69,7 +67,6 @@ export function App() {
     busy={client.busy}
     notice={client.notice}
     onAction={client.submitAction}
-    onNewHand={client.newHand}
     onLeave={client.leaveRoom}
     onGetReplay={client.getReplay}
     onClearReplay={client.clearReplay}

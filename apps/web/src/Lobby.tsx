@@ -1,29 +1,23 @@
-import { useMemo, useState, type FormEvent } from 'react';
-import type { RoomSummary, SessionView, SimulationReport } from '@holdem/protocol';
+import { useState, type FormEvent } from 'react';
+import type { RoomSummary, SessionView } from '@holdem/protocol';
 
 interface LobbyProps {
   connection: 'CONNECTING' | 'OPEN' | 'CLOSED';
   session: SessionView | null;
   rooms: RoomSummary[];
-  simulation: SimulationReport | null;
   busy: boolean;
   notice: string;
   onCreate: (config: { roomName: string; playerName: string; maxPlayers: number; botCount: number; startingStack: number; smallBlind: number; bigBlind: number; turnSeconds: number }) => void;
   onJoin: (roomId: string, playerName: string) => void;
   onRefresh: () => void;
-  onSimulate: (hands: number, playerCount: number, seed: number) => void;
 }
 
-export function Lobby({ connection, session, rooms, simulation, busy, notice, onCreate, onJoin, onRefresh, onSimulate }: LobbyProps) {
+export function Lobby({ connection, session, rooms, busy, notice, onCreate, onJoin, onRefresh }: LobbyProps) {
   const [playerName, setPlayerName] = useState(() => sessionStorage.getItem('holdem-lab-name') ?? session?.name ?? '玩家');
   const [roomName, setRoomName] = useState('周末牌局');
   const [roomCode, setRoomCode] = useState('');
   const [maxPlayers, setMaxPlayers] = useState(6);
   const [botCount, setBotCount] = useState(1);
-  const [hands, setHands] = useState(100);
-  const [simulationPlayers, setSimulationPlayers] = useState(6);
-  const [seed, setSeed] = useState(2026);
-  const maxWins = useMemo(() => Math.max(1, ...Object.values(simulation?.wins ?? {})), [simulation]);
 
   const rememberName = () => sessionStorage.setItem('holdem-lab-name', playerName.trim());
   const create = (event: FormEvent) => {
@@ -62,25 +56,11 @@ export function Lobby({ connection, session, rooms, simulation, busy, notice, on
           {rooms.map((room) => <article key={room.id} className="room-row">
             <div><strong>{room.name}</strong><span>#{room.id} · {room.smallBlind}/{room.bigBlind} · {room.botCount} Bot</span></div>
             <span>{room.playerCount}/{room.maxPlayers}</span>
-            <button disabled={busy || room.status !== 'WAITING'} onClick={() => join(room.id)}>{room.status === 'WAITING' ? '加入' : '进行中'}</button>
+            <button disabled={busy || room.status !== 'WAITING'} onClick={() => join(room.id)}>{room.status === 'WAITING' ? '加入' : room.status === 'FINISHED' ? '已结束' : '进行中'}</button>
           </article>)}
         </div>
       </section>
 
-      <section className="panel simulation-panel">
-        <div className="panel-heading"><div><span>批量模拟</span><h2>基础策略自对战</h2></div><b>LAB</b></div>
-        <div className="form-row three">
-          <label>手数<input type="number" min="1" max="1000" value={hands} onChange={(event) => setHands(Number(event.target.value))} /></label>
-          <label>人数<select value={simulationPlayers} onChange={(event) => setSimulationPlayers(Number(event.target.value))}>{[2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value}>{value}</option>)}</select></label>
-          <label>种子<input type="number" min="0" max="4294967295" value={seed} onChange={(event) => setSeed(Number(event.target.value))} /></label>
-        </div>
-        <button className="secondary wide" disabled={busy || connection !== 'OPEN'} onClick={() => onSimulate(hands, simulationPlayers, seed)}>运行模拟</button>
-        {simulation && <div className="simulation-result">
-          <p>{simulation.hands} 手牌 · 平均 {simulation.averageActions} 次动作</p>
-          {Object.entries(simulation.wins).map(([id, wins], index) => <div className="result-row" key={id}><span>Bot {index + 1}</span><i><b style={{ width: `${wins / maxWins * 100}%` }} /></i><strong>{wins}</strong></div>)}
-        </div>}
-        <small>Monte Carlo、CFR、GTO、RL 已预留统一策略插件接口，当前不执行这些算法。</small>
-      </section>
     </section>
     {notice && <div className="toast error" role="alert">{notice}</div>}
     <footer className="lobby-footer">会话 {session?.playerId.slice(-6) ?? '建立中'} · 当前页面刷新后可自动恢复</footer>
