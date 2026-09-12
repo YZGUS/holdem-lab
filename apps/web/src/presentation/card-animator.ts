@@ -7,6 +7,10 @@ function cardLabel(card: Card) {
   return { rank, suit, red: card[1] === 'h' || card[1] === 'd' };
 }
 
+function cardTheme() {
+  return document.querySelector<HTMLElement>('[data-card-theme]')?.dataset.cardTheme ?? 'classic';
+}
+
 export class CardAnimator {
   private overlays = new Set<HTMLElement>();
   private hiddenTargets = new Set<HTMLElement>();
@@ -50,6 +54,7 @@ export class CardAnimator {
       const destination = center(targetRect);
       const card = document.createElement('i');
       card.className = 'effect-card effect-card-back';
+      card.dataset.cardTheme = cardTheme();
       card.style.left = `${source.x - targetRect.width / 2}px`;
       card.style.top = `${source.y - targetRect.height / 2}px`;
       card.style.width = `${targetRect.width}px`;
@@ -78,6 +83,7 @@ export class CardAnimator {
       const destination = center(targetRect);
       const wrapper = document.createElement('span');
       wrapper.className = 'effect-flip-card';
+      wrapper.dataset.cardTheme = cardTheme();
       wrapper.style.left = `${source.x - targetRect.width / 2}px`;
       wrapper.style.top = `${source.y - targetRect.height / 2}px`;
       wrapper.style.width = `${targetRect.width}px`;

@@ -1,16 +1,16 @@
+import { useState } from 'react';
 import type { RoomView } from '@holdem/protocol';
+import { ConfirmDialog } from './ConfirmDialog';
 
 export function WaitingRoom({ room, connection, busy, onStart, onLeave, onDisband }: { room: RoomView; connection: string; busy: boolean; onStart: () => void; onLeave: () => void; onDisband: () => void }) {
+  const [confirmingDisband, setConfirmingDisband] = useState(false);
   const isHost = room.hostPlayerId === room.viewerPlayerId;
   const waitingToStart = room.status === 'WAITING';
   const copyCode = () => navigator.clipboard?.writeText(room.id);
-  const disband = () => {
-    if (window.confirm('确定解散房间？所有玩家都会返回大厅。')) onDisband();
-  };
   return <main className="waiting-shell">
     <header className="room-header">
       <div><p className="eyebrow">HOLDEM LAB · LOBBY</p><h1>{room.name}</h1></div>
-      <div className="room-actions"><span className="status-pill open">{connection === 'OPEN' ? '已连接' : '正在重连'}</span>{isHost && <button className="ghost danger" disabled={busy} onClick={disband}>解散房间</button>}<button className="ghost" onClick={onLeave}>{waitingToStart ? '离开房间' : '离桌'}</button></div>
+      <div className="room-actions"><span className="status-pill open">{connection === 'OPEN' ? '已连接' : '正在重连'}</span>{isHost && <button className="ghost danger" disabled={busy} onClick={() => setConfirmingDisband(true)}>解散房间</button>}<button className="ghost" onClick={onLeave}>{waitingToStart ? '离开房间' : '离桌'}</button></div>
     </header>
     <section className="waiting-card">
       <div className="code-block"><span>房间码</span><strong>{room.id}</strong><button onClick={copyCode}>复制</button></div>
@@ -26,5 +26,12 @@ export function WaitingRoom({ room, connection, busy, onStart, onLeave, onDisban
       </div>
       {waitingToStart ? isHost ? <button className="primary start-button" disabled={busy || room.players.length < 2} onClick={onStart}>开始牌局</button> : <p className="waiting-note">等待房主开始牌局</p> : <p className="waiting-note">已返回牌桌，将从下一手加入</p>}
     </section>
+    {confirmingDisband && <ConfirmDialog
+      title="解散这个房间？"
+      description="房间码将立即失效，所有玩家都会返回大厅。"
+      busy={busy}
+      onCancel={() => setConfirmingDisband(false)}
+      onConfirm={onDisband}
+    />}
   </main>;
 }

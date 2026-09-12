@@ -5,6 +5,7 @@ import {
 } from '@holdem/core';
 import type { RoomView } from '@holdem/protocol';
 import { CardFace } from './CardFace';
+import { ConfirmDialog } from './ConfirmDialog';
 import { MatchSettlement } from './MatchSettlement';
 import type { ClientNotice } from './useGameClient';
 import { SoundControls } from './presentation/SoundControls';
@@ -91,6 +92,7 @@ export function PokerTable({
   const [now, setNow] = useState(Date.now());
   const [cardTheme, setCardTheme] = useState<'classic' | 'contrast'>(() => sessionStorage.getItem('holdem-card-theme') === 'contrast' ? 'contrast' : 'classic');
   const [settlementOpen, setSettlementOpen] = useState(false);
+  const [confirmingDisband, setConfirmingDisband] = useState(false);
   usePresentationEffects(table, Boolean(replay));
 
   useEffect(() => {
@@ -194,10 +196,6 @@ export function PokerTable({
     sessionStorage.setItem('holdem-card-theme', next);
     return next;
   });
-  const disband = () => {
-    if (window.confirm('确定解散房间？当前牌局将立即结束，所有玩家都会返回大厅。')) onDisband();
-  };
-
   const observerText = viewerRoomPlayer.stack === 0
     ? viewerRoomPlayer.rebuyStatus === 'PENDING' ? '补充申请等待房主处理'
       : viewerRoomPlayer.rebuyStatus === 'APPROVED' ? '补充已批准，将从下一手加入'
@@ -208,7 +206,7 @@ export function PokerTable({
     <header className="topbar">
       <div className="table-identity"><p className="eyebrow">HOLDEM LAB · #{room.id}</p><h1>{room.name}</h1></div>
       <div className="hand-stage" aria-label="牌局进度"><strong>第 {displayTable.handNumber} 手</strong><span>{phaseNames[displayTable.phase]}</span></div>
-      <div className="table-meta" aria-label="牌桌信息"><span className="meta-mode">{room.gameMode === 'POINTS' ? '积分桌' : '淘汰赛'}</span><span className="meta-blinds">盲注 {room.smallBlind}/{room.bigBlind}</span><span className={`status-pill ${connection.toLowerCase()}`}>{connection === 'OPEN' ? '已连接' : '正在重连'}</span><SoundControls /><button className="ghost compact theme-toggle" onClick={toggleCardTheme}>卡面：{cardTheme === 'classic' ? '经典' : '高对比'}</button>{isHost && <button className="ghost compact danger host-action" disabled={busy} onClick={disband}>解散</button>}<button className="ghost compact leave-action" onClick={onLeave}>离桌</button></div>
+      <div className="table-meta" aria-label="牌桌信息"><span className="meta-mode">{room.gameMode === 'POINTS' ? '积分桌' : '淘汰赛'}</span><span className="meta-blinds">盲注 {room.smallBlind}/{room.bigBlind}</span><span className={`status-pill ${connection.toLowerCase()}`}>{connection === 'OPEN' ? '已连接' : '正在重连'}</span><SoundControls /><button className="ghost compact theme-toggle" onClick={toggleCardTheme}>卡面：{cardTheme === 'classic' ? '经典' : '高对比'}</button>{isHost && <button className="ghost compact danger host-action" disabled={busy} onClick={() => setConfirmingDisband(true)}>解散</button>}<button className="ghost compact leave-action" onClick={onLeave}>离桌</button></div>
     </header>
 
     <section className={`play-area${drawer ? ' panel-open' : ''}`} aria-label="德州扑克牌桌">
@@ -245,12 +243,12 @@ export function PokerTable({
 
       <aside className={`side-panel${drawer ? ' open' : ''}`} aria-live="polite">
         <nav className="tool-tabs" aria-label="辅助信息">
-          <button className={drawer === 'ranks' ? 'selected' : ''} aria-expanded={drawer === 'ranks'} onClick={() => toggleDrawer('ranks')}>牌型</button>
-          <button className={drawer === 'history' ? 'selected' : ''} aria-expanded={drawer === 'history'} onClick={() => toggleDrawer('history')}>记录</button>
-          {room.status === 'FINISHED' && <button className={drawer === 'replays' ? 'selected' : ''} aria-expanded={drawer === 'replays'} onClick={() => toggleDrawer('replays')}>回放</button>}
+          <button className={drawer === 'ranks' ? 'selected' : ''} aria-label={drawer === 'ranks' ? '关闭牌型面板' : '打开牌型面板'} aria-expanded={drawer === 'ranks'} onClick={() => toggleDrawer('ranks')}>牌型</button>
+          <button className={drawer === 'history' ? 'selected' : ''} aria-label={drawer === 'history' ? '关闭记录面板' : '打开记录面板'} aria-expanded={drawer === 'history'} onClick={() => toggleDrawer('history')}>记录</button>
+          {room.status === 'FINISHED' && <button className={drawer === 'replays' ? 'selected' : ''} aria-label={drawer === 'replays' ? '关闭回放面板' : '打开回放面板'} aria-expanded={drawer === 'replays'} onClick={() => toggleDrawer('replays')}>回放</button>}
         </nav>
         {drawer && <div className="drawer-content">
-          <div className="drawer-heading"><h2>{drawer === 'history' ? '牌局记录' : drawer === 'ranks' ? '牌型大小' : '整局回放'}</h2><button aria-label="关闭辅助面板" onClick={() => setDrawer(null)}>关闭</button></div>
+          <div className="drawer-heading"><h2>{drawer === 'history' ? '牌局记录' : drawer === 'ranks' ? '牌型大小' : '整局回放'}</h2></div>
           {drawer === 'history' && <><h3>本手记录</h3><div className="history-list">{[...displayTable.recentHistory].reverse().map((entry) => <div key={entry.index}><span>{phaseNames[entry.phase]}</span><p>{entry.text}</p></div>)}</div><h3 className="ledger-title">筹码记录</h3><div className="history-list">{[...room.ledger].reverse().slice(0, 30).map((entry) => <div key={entry.index}><span>牌桌</span><p>{entry.text}</p></div>)}</div></>}
           {drawer === 'ranks' && <ol className="rank-list">{rankExamples.map((rank) => <li key={rank.name}><strong>{rank.name}</strong><div className="rank-example" aria-label={`${rank.name}示例`}>{rank.cards.map((card) => <CardFace card={card} small key={card} />)}</div></li>)}</ol>}
           {drawer === 'replays' && <><p className="drawer-empty">选择一手查看这一整局的过程。</p><div className="replay-list">{room.replays.map((item) => <button key={item.handId} onClick={() => onGetReplay(item.handId)}><strong>第 {item.handNumber} 手</strong><span>{item.resultText}</span><small>{item.actionCount} 次动作</small></button>)}</div></>}
@@ -262,6 +260,13 @@ export function PokerTable({
         onClose={() => setSettlementOpen(false)}
         onViewReplays={() => { setSettlementOpen(false); setDrawer('replays'); }}
         onReturnLobby={onLeave}
+      />}
+      {confirmingDisband && <ConfirmDialog
+        title="解散当前牌局？"
+        description="当前牌局会立即结束，所有玩家都会返回大厅。"
+        busy={busy}
+        onCancel={() => setConfirmingDisband(false)}
+        onConfirm={onDisband}
       />}
     </section>
 
