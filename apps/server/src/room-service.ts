@@ -402,6 +402,7 @@ export class RoomService {
     const { room, player } = this.requireMembership(sessionToken);
     if (room.gameMode !== 'POINTS' || !room.rebuyEnabled) throw new Error('当前房间不允许补充筹码');
     if (player.stack > 0) throw new Error('筹码用完后才能申请补充');
+    if (player.rebuyStatus === 'DECLINED') throw new Error('你已经放弃本局');
     if (player.rebuyStatus !== 'NONE') throw new Error('补充申请已经提交');
     if (room.maxHands !== null && room.handNumber >= room.maxHands) throw new Error('牌局已达到手数上限');
     if (room.maxRebuys !== null && player.rebuyCount >= room.maxRebuys) throw new Error('已达到补充次数上限');
@@ -410,6 +411,22 @@ export class RoomService {
 
     player.rebuyStatus = 'PENDING';
     this.addLedger(room, 'REBUY_REQUESTED', player.id, `${player.name} 申请补充 ${room.rebuyAmount}`, room.rebuyAmount);
+    this.save();
+    return room;
+  }
+
+  declineRebuy(sessionToken: string) {
+    const { room, player } = this.requireMembership(sessionToken);
+    if (room.status === 'FINISHED') return room;
+    if (room.gameMode !== 'POINTS' || !room.rebuyEnabled) throw new Error('当前牌局没有补充筹码流程');
+    if (player.stack > 0) throw new Error('仍有筹码，不能放弃补充');
+    if (!room.game || room.game.phase !== 'FINISHED') throw new Error('请等待本手结算完成');
+    if (player.rebuyStatus === 'APPROVED') throw new Error('补充筹码已经批准');
+    if (player.rebuyStatus === 'DECLINED') return room;
+
+    player.rebuyStatus = 'DECLINED';
+    this.addLedger(room, 'REBUY_DECLINED', player.id, `${player.name} 放弃本局`);
+    this.archiveFinishedHand(room);
     this.save();
     return room;
   }
@@ -465,6 +482,15 @@ export class RoomService {
       player.rebuyCount += 1;
       player.rebuyStatus = 'NONE';
       this.addLedger(room, 'REBUY_APPLIED', player.id, `${player.name} 获得补充筹码 ${room.rebuyAmount}`, room.rebuyAmount);
+    });
+  }
+
+  private canRestoreCompetition(room: RoomRecord) {
+    if (room.gameMode !== 'POINTS' || !room.rebuyEnabled) return false;
+    return room.players.some((player) => {
+      if (player.kind !== 'HUMAN' || player.stack > 0 || player.rebuyStatus === 'DECLINED') return false;
+      if (player.rebuyStatus === 'PENDING' || player.rebuyStatus === 'APPROVED') return true;
+      return room.maxRebuys === null || player.rebuyCount < room.maxRebuys;
     });
   }
 
@@ -574,7 +600,8 @@ export class RoomService {
       return;
     }
     this.applyApprovedRebuys(room);
-    if (room.gameMode === 'TOURNAMENT' && room.players.filter((player) => player.stack > 0).length < 2) {
+    const fundedPlayerCount = room.players.filter((player) => player.stack > 0).length;
+    if (fundedPlayerCount < 2 && !this.canRestoreCompetition(room)) {
       room.status = 'FINISHED';
       room.pauseReason = null;
       room.turnDeadline = null;

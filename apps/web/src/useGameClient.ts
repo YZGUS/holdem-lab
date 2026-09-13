@@ -223,6 +223,7 @@ export function useGameClient() {
     leaveTable,
     disbandRoom: () => send({ type: 'DISBAND_ROOM' }),
     requestRebuy: () => send({ type: 'REQUEST_REBUY' }),
+    declineRebuy: () => send({ type: 'DECLINE_REBUY' }),
     resolveRebuy: (playerId: string, approved: boolean) => send({ type: 'RESOLVE_REBUY', playerId, approved }),
     startGame: () => send({ type: 'START_GAME' }),
     newHand: () => send({ type: 'NEW_HAND' }),

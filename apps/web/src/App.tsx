@@ -77,6 +77,7 @@ export function App() {
     onLeave={client.leaveTable}
     onDisband={client.disbandRoom}
     onRequestRebuy={client.requestRebuy}
+    onDeclineRebuy={client.declineRebuy}
     onResolveRebuy={client.resolveRebuy}
     onGetReplay={client.getReplay}
     onClearReplay={client.clearReplay}

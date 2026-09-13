@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   playerView, replayHand, tableView, type ActionType, type Card, type HandReplay,
   type LegalActions, type PlayerAction, type PlayerView, type PublicPlayer, type TableView,
@@ -41,6 +41,7 @@ interface PokerTableProps {
   onLeave: () => void;
   onDisband: () => void;
   onRequestRebuy: () => void;
+  onDeclineRebuy: () => void;
   onResolveRebuy: (playerId: string, approved: boolean) => void;
   onGetReplay: (handId: string) => void;
   onClearReplay: () => void;
@@ -82,7 +83,7 @@ function gamePlayerOrObserver(roomPlayer: RoomView['players'][number], player?: 
 
 export function PokerTable({
   room, table, view, replay, connection, busy, notice, onAction, onLeave, onDisband,
-  onRequestRebuy, onResolveRebuy, onGetReplay, onClearReplay, onDismissNotice,
+  onRequestRebuy, onDeclineRebuy, onResolveRebuy, onGetReplay, onClearReplay, onDismissNotice,
 }: PokerTableProps) {
   const [drawer, setDrawer] = useState<'history' | 'ranks' | 'replays' | null>(null);
   const [raiseOpen, setRaiseOpen] = useState(false);
@@ -92,7 +93,9 @@ export function PokerTable({
   const [now, setNow] = useState(Date.now());
   const [cardTheme, setCardTheme] = useState<'classic' | 'contrast'>(() => sessionStorage.getItem('holdem-card-theme') === 'contrast' ? 'contrast' : 'classic');
   const [settlementOpen, setSettlementOpen] = useState(false);
+  const settlementRoom = useRef<string | null>(null);
   const [confirmingDisband, setConfirmingDisband] = useState(false);
+  const [confirmingDecline, setConfirmingDecline] = useState(false);
   usePresentationEffects(table, Boolean(replay));
 
   useEffect(() => {
@@ -119,13 +122,17 @@ export function PokerTable({
     return () => window.clearTimeout(timer);
   }, [playingReplay, replay, replayStep]);
   useEffect(() => {
-    if (room.status !== 'FINISHED' || replay) {
+    if (room.status !== 'FINISHED') {
+      settlementRoom.current = null;
       setSettlementOpen(false);
       return;
     }
+    if (settlementRoom.current === room.id) return;
+    settlementRoom.current = room.id;
+    if (replay || drawer === 'replays') return;
     const timer = window.setTimeout(() => setSettlementOpen(true), 900);
     return () => window.clearTimeout(timer);
-  }, [replay, room.id, room.status, table.handId]);
+  }, [drawer, replay, room.id, room.status]);
 
   const replayState = useMemo(() => replay ? replayHand(replay, replayStep) : null, [replay, replayStep]);
   const displayTable = useMemo(() => replayState ? tableView(replayState) : table, [replayState, table]);
@@ -185,6 +192,11 @@ export function PokerTable({
     && viewerRoomPlayer.stack === 0
     && viewerRoomPlayer.rebuyStatus === 'NONE'
     && (room.maxRebuys === null || viewerRoomPlayer.rebuyCount < room.maxRebuys);
+  const browsingReplays = !replay && room.status === 'FINISHED' && drawer === 'replays';
+  const waitingRebuyPlayers = room.players.filter((player) => player.kind === 'HUMAN'
+    && player.stack === 0
+    && player.rebuyStatus !== 'DECLINED'
+    && (player.rebuyStatus !== 'NONE' || room.maxRebuys === null || player.rebuyCount < room.maxRebuys));
   const mainAction = legal.types.includes('CHECK')
     ? { label: '过牌', action: { type: 'CHECK' } as PlayerAction }
     : { label: `跟注 ${legal.callAmount}`, action: { type: 'CALL' } as PlayerAction };
@@ -199,6 +211,7 @@ export function PokerTable({
   const observerText = viewerRoomPlayer.stack === 0
     ? viewerRoomPlayer.rebuyStatus === 'PENDING' ? '补充申请等待房主处理'
       : viewerRoomPlayer.rebuyStatus === 'APPROVED' ? '补充已批准，将从下一手加入'
+        : viewerRoomPlayer.rebuyStatus === 'DECLINED' ? '已放弃本局，正在观战'
         : '筹码已用完，正在观战'
     : '等待下一手加入牌局';
 
@@ -221,7 +234,9 @@ export function PokerTable({
           const player = gamePlayerOrObserver(roomPlayer, displayTable.players.find((item) => item.id === roomPlayer.id));
           const ownCards = player.id === room.viewerPlayerId ? displayPrivate?.holeCards : displayTable.revealedCards[player.id];
           const roles = [player.id === displayTable.dealerId ? '庄家' : '', player.id === displayTable.smallBlindId ? '小盲' : '', player.id === displayTable.bigBlindId ? '大盲' : ''].filter(Boolean);
-          const stateText = roomPlayer.presence === 'AWAY' ? '暂离' : roomPlayer.stack === 0 && !player.allIn ? '观战' : !player.inHand ? '等待下一手' : player.folded ? '已弃牌' : player.allIn ? 'All-in' : !roomPlayer.connected ? '离线' : '';
+          const stateText = replay
+            ? !player.inHand ? '未参与' : player.folded ? '已弃牌' : player.allIn ? 'All-in' : ''
+            : roomPlayer.presence === 'AWAY' ? '暂离' : player.stack === 0 && !player.allIn ? '观战' : !player.inHand ? '等待下一手' : player.folded ? '已弃牌' : player.allIn ? 'All-in' : !roomPlayer.connected ? '离线' : '';
           const relativeSeat = (index - viewerIndex + room.players.length) % room.players.length;
           return <article
             className={`seat ${player.id === room.viewerPlayerId ? 'hero' : ''} ${player.id === displayTable.currentPlayerId ? 'active' : ''} ${player.id === nextPlayerId ? 'next' : ''} ${displayTable.winnerIds.includes(player.id) ? 'winner' : ''} ${player.folded ? 'folded' : ''} ${!player.inHand ? 'spectator' : ''}`}
@@ -231,7 +246,7 @@ export function PokerTable({
             <div className="seat-card">
               <div className={`avatar ${player.kind.toLowerCase()}`}>{player.kind === 'BOT' ? 'AI' : player.id === room.viewerPlayerId ? '你' : player.name[0]}</div>
               <div><strong>{player.id === room.viewerPlayerId ? '你' : player.name}</strong><small>{player.kind === 'BOT' ? 'Bot' : '玩家'}{stateText ? ` · ${stateText}` : ''}</small></div>
-              <span>{roomPlayer.stack.toLocaleString()}</span>
+              <span>{player.stack.toLocaleString()}</span>
               {roles.length > 0 && <div className="position-badges" aria-label={`${player.name}的位置`}>{roles.map((role) => <span key={role}>{role}</span>)}</div>}
             </div>
             {displayTable.handRanks[player.id] && <div className="rank-chip">{displayTable.handRanks[player.id].description || displayTable.handRanks[player.id].name}</div>}
@@ -268,6 +283,16 @@ export function PokerTable({
         onCancel={() => setConfirmingDisband(false)}
         onConfirm={onDisband}
       />}
+      {confirmingDecline && <ConfirmDialog
+        title="放弃本局？"
+        description="放弃后不能再次加入本局，但可以继续观战并查看最终排名。"
+        busy={busy}
+        cancelLabel="继续考虑"
+        confirmLabel="确认放弃"
+        busyLabel="正在确认…"
+        onCancel={() => setConfirmingDecline(false)}
+        onConfirm={() => { setConfirmingDecline(false); onDeclineRebuy(); }}
+      />}
     </section>
 
     <footer className="action-dock" aria-label="玩家操作">
@@ -279,16 +304,20 @@ export function PokerTable({
         <span>{replayStep}/{replay.actions.length}</span>
         <button onClick={() => downloadReplay(replay)}>导出 JSON</button>
         <button onClick={onClearReplay}>退出回放</button>
+      </div> : browsingReplays ? <div className="postgame-navigation">
+        <span><strong>整局回放</strong>从右侧选择一手开始播放</span>
+        <button onClick={() => { setDrawer(null); setSettlementOpen(true); }}>返回排行榜</button>
       </div> : <>
         {raiseOpen && legal.minRaiseTo !== null && <div className="raise-panel" role="dialog" aria-label="加注设置"><div className="quick-row">{quickRaises.map((item) => <button key={item.label} onClick={() => setRaiseTo(item.value)}>{item.label}</button>)}<button onClick={() => setRaiseTo(legal.maxRaiseTo)}>全下</button></div><label><span>加注到</span><output>{raiseTo.toLocaleString()}</output><input type="range" min={legal.minRaiseTo} max={legal.maxRaiseTo} value={raiseTo} onChange={(event) => setRaiseTo(Number(event.target.value))} /></label><button className="confirm" onClick={() => act({ type: 'RAISE', raiseTo })}>确认加注</button></div>}
-        {room.status === 'FINISHED' ? <button className="match-finished" onClick={() => setSettlementOpen(true)}>整局结束 · 查看结算</button>
-          : pausedForPlayers ? <div className="round-paused"><span><strong>牌局暂停</strong>{fundedPlayers[0] ? `${fundedPlayers[0].id === room.viewerPlayerId ? '你' : fundedPlayers[0].name} 暂时领先 · ${fundedPlayers[0].stack.toLocaleString()}` : '暂无可参赛玩家'}</span>{canRequestRebuy && <button className="primary" disabled={busy} onClick={onRequestRebuy}>申请补充 {room.rebuyAmount.toLocaleString()}</button>}</div>
-          : isObserver ? <div className="observer-bar"><span>{observerText}</span>{canRequestRebuy && <button className="primary" disabled={busy} onClick={onRequestRebuy}>申请补充 {room.rebuyAmount.toLocaleString()}</button>}</div>
+        {room.status === 'FINISHED' ? <button className="match-finished" onClick={() => setSettlementOpen(true)}>整局结束 · 查看排行榜</button>
+          : canRequestRebuy ? <div className="bust-decision"><span><strong>筹码已用完</strong>牌局已暂停，请选择是否继续参赛</span><div><button className="decline" disabled={busy} onClick={() => setConfirmingDecline(true)}>放弃本局</button><button className="primary" disabled={busy} onClick={onRequestRebuy}>申请补充 {room.rebuyAmount.toLocaleString()}</button></div></div>
+          : isObserver ? <div className="observer-bar"><span>{observerText}</span></div>
+          : pausedForPlayers ? <div className="round-paused"><span><strong>牌局暂停</strong>{waitingRebuyPlayers.length > 0 ? `等待 ${waitingRebuyPlayers.length} 名玩家决定是否补充筹码` : fundedPlayers[0] ? `${fundedPlayers[0].id === room.viewerPlayerId ? '你' : fundedPlayers[0].name} 暂时领先 · ${fundedPlayers[0].stack.toLocaleString()}` : '暂无可参赛玩家'}</span></div>
             : displayTable.phase === 'FINISHED' ? <p className="auto-next-hand">{room.status === 'PAUSED' ? '牌局已暂停，等待玩家补充筹码' : '下一手即将自动开始…'}</p>
               : viewerGamePlayer?.allIn && !viewerGamePlayer.folded ? <p className="auto-next-hand">已全下，等待本手结算</p>
                 : !isHeroTurn ? <p className="waiting-action">{currentPlayerLabel ? `等待 ${currentPlayerLabel}行动` : '正在同步牌局'}</p>
                   : <div className="main-actions"><button disabled={!can('FOLD')} onClick={() => act({ type: 'FOLD' })}>弃牌</button><button disabled={!can(mainAction.action.type)} onClick={() => act(mainAction.action)}>{mainAction.label}</button><button className="primary raise-trigger" disabled={!can('RAISE') && !can('ALL_IN')} onClick={() => legal.types.includes('RAISE') ? setRaiseOpen((open) => !open) : act({ type: 'ALL_IN' })}>{thirdLabel}</button></div>}
-        <p className={notice?.tone === 'error' ? 'notice error' : 'notice'}>{notice ? <><span>{notice.message}</span><button aria-label="关闭提示" onClick={onDismissNotice}>×</button></> : busy ? '正在确认…' : isObserver ? observerText : isHeroTurn ? '请选择你的行动' : '当前操作区将在轮到你时出现'}</p>
+        <p className={notice?.tone === 'error' ? 'notice error' : 'notice'}>{notice ? <><span>{notice.message}</span><button aria-label="关闭提示" onClick={onDismissNotice}>×</button></> : busy ? '正在确认…' : canRequestRebuy ? '选择后由服务器判断继续牌局或进入最终结算' : isObserver ? observerText : isHeroTurn ? '请选择你的行动' : '当前操作区将在轮到你时出现'}</p>
       </>}
     </footer>
   </main>;

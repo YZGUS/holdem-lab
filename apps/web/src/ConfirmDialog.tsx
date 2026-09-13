@@ -4,11 +4,16 @@ interface ConfirmDialogProps {
   title: string;
   description: string;
   busy: boolean;
+  cancelLabel?: string;
+  confirmLabel?: string;
+  busyLabel?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-export function ConfirmDialog({ title, description, busy, onCancel, onConfirm }: ConfirmDialogProps) {
+export function ConfirmDialog({
+  title, description, busy, cancelLabel = '保留房间', confirmLabel = '确认解散', busyLabel = '正在解散…', onCancel, onConfirm,
+}: ConfirmDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -33,8 +38,8 @@ export function ConfirmDialog({ title, description, busy, onCancel, onConfirm }:
         <p id={descriptionId}>{description}</p>
       </div>
       <footer className="confirm-actions">
-        <button ref={cancelRef} disabled={busy} onClick={onCancel}>保留房间</button>
-        <button className="confirm-danger" disabled={busy} onClick={onConfirm}>{busy ? '正在解散…' : '确认解散'}</button>
+        <button ref={cancelRef} disabled={busy} onClick={onCancel}>{cancelLabel}</button>
+        <button className="confirm-danger" disabled={busy} onClick={onConfirm}>{busy ? busyLabel : confirmLabel}</button>
       </footer>
     </section>
   </div>;

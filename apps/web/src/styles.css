@@ -190,7 +190,7 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 .turn-banner > span { flex: 0 0 auto; width: .45rem; height: .45rem; border-radius: 50%; background: var(--gold); box-shadow: 0 0 0 .25rem #e3bb6318; }
 .table {
   position: relative;
-  width: min(82cqw, 68rem, calc((100dvh - 13.5rem) * 1.78));
+  width: min(82cqw, 68rem, calc((100cqh - 6rem) * 1.78));
   aspect-ratio: 1.86 / 1;
   border: .65rem solid #5b3a20;
   border-radius: 50%;
@@ -312,6 +312,12 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 .round-paused > span { display: grid; gap: .12rem; font-size: .7rem; }
 .round-paused strong { color: #f1d48d; font-size: .82rem; }
 .round-paused button { min-height: 2.25rem; padding: 0 .85rem; }
+.bust-decision { min-height: 4rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 1rem; padding: .55rem .65rem .55rem .9rem; color: #dce5df; border: 1px solid #c7a55b55; border-radius: .8rem; background: #11291f; box-shadow: 0 .7rem 1.8rem #0004; }
+.bust-decision > span { display: grid; gap: .18rem; font-size: .7rem; }
+.bust-decision strong { color: #f1d48d; font-size: .88rem; }
+.bust-decision > div { display: flex; gap: .45rem; }
+.bust-decision button { min-height: 2.5rem; padding: 0 .9rem; }
+.bust-decision .decline { color: #efb0a8; border-color: #e4776d55; background: #421b194d; }
 .rebuy-requests { display: grid; gap: .35rem; padding: .45rem; border: 1px solid #c7a55b55; border-radius: .75rem; background: #0b1c17f7; }
 .rebuy-requests > div { display: grid; grid-template-columns: 1fr auto auto; gap: .4rem; align-items: center; }
 .rebuy-requests span { color: #f0dfb8; font-size: .75rem; }
@@ -334,6 +340,10 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 .replay-controls button { min-height: 2.4rem; padding: 0 .7rem; font-size: .72rem; }
 .replay-controls input { width: 100%; accent-color: var(--gold); }
 .replay-controls span { color: #c8b680; font: .72rem/1 ui-monospace, monospace; }
+.postgame-navigation { min-height: 3rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .4rem .55rem .4rem .85rem; color: #dce5df; border: 1px solid #c7a55b55; border-radius: .75rem; background: #183328; }
+.postgame-navigation span { display: grid; gap: .12rem; color: #aebdb6; font-size: .68rem; }
+.postgame-navigation strong { color: #f1d48d; font-size: .82rem; }
+.postgame-navigation button { min-height: 2.25rem; padding: 0 .85rem; }
 
 .effect-card, .effect-flip-card, .effect-chip {
   position: fixed;
@@ -388,9 +398,9 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 .effect-chip.chip-2 { background: #277a59; }
 
 .match-settlement-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 10;
+  z-index: 50;
   display: grid;
   place-items: center;
   padding: 1rem;
@@ -400,7 +410,7 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 .match-settlement {
   position: relative;
   width: min(34rem, 100%);
-  max-height: 100%;
+  max-height: calc(100dvh - 2rem);
   display: grid;
   gap: .85rem;
   padding: 1.35rem;
@@ -410,18 +420,23 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
   background: #071612f7;
   box-shadow: 0 2rem 5rem #000b, inset 0 1px #ffffff10;
 }
-.match-settlement > .eyebrow { margin: 0; text-align: center; }
+.settlement-heading { display: grid; gap: .22rem; text-align: center; }
+.settlement-heading .eyebrow { margin: 0; }
+.settlement-heading h2 { margin: 0; color: #f4ead2; font-size: 1.25rem; }
+.settlement-heading > p:last-child { margin: 0; color: #84988e; font-size: .68rem; }
 .settlement-close { position: absolute; top: .65rem; right: .65rem; width: 2rem; height: 2rem; color: #aebdb6; border: 1px solid var(--line); border-radius: 50%; background: #ffffff08; font-size: 1.15rem; }
 .champion-block { display: flex; align-items: center; justify-content: center; gap: .8rem; padding: .35rem 0; }
 .champion-block > span { width: 3.4rem; height: 3.4rem; display: grid; place-items: center; color: #172018; border-radius: 50%; background: var(--gold); box-shadow: 0 0 0 .35rem #e3bb6315; font-weight: 850; }
 .champion-block small { color: #aebdb6; font-size: .7rem; }
-.champion-block h2 { margin: .15rem 0 0; font-size: 1.45rem; }
+.champion-block strong { display: block; margin-top: .15rem; color: #f3eee2; font-size: 1.45rem; }
 .settlement-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: .45rem; margin: 0; }
 .settlement-stats div { display: grid; gap: .18rem; padding: .65rem; border: 1px solid #ffffff10; border-radius: .65rem; background: #ffffff05; text-align: center; }
 .settlement-stats dt { color: #8fa198; font-size: .65rem; }
 .settlement-stats dd { margin: 0; font: 700 .88rem/1.2 ui-monospace, monospace; }
 .positive { color: #83dfb2 !important; }
 .negative { color: #efa39a !important; }
+.standings-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto 4.4rem; gap: .55rem; padding: 0 .65rem; color: #71867c; font-size: .6rem; }
+.standings-heading span:nth-child(n+2) { text-align: right; }
 .standings { min-height: 0; display: grid; gap: .28rem; overflow-y: auto; }
 .standings > div { display: grid; grid-template-columns: 2rem minmax(0, 1fr) auto 4.4rem; gap: .55rem; align-items: center; padding: .5rem .65rem; border: 1px solid #ffffff0c; border-radius: .6rem; background: #ffffff04; }
 .standings > div.champion { border-color: #c7a55b44; background: #183328; }
@@ -442,7 +457,7 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 
 @media (min-width: 1100px) {
   .play-area.panel-open { padding-right: 23.5rem; }
-  .play-area.panel-open .table { width: min(100cqw, 68rem, calc((100dvh - 13.5rem) * 1.78)); }
+  .play-area.panel-open .table { width: min(100cqw, 68rem, calc((100cqh - 6rem) * 1.78)); }
 }
 
 @media (max-width: 900px) {
@@ -451,7 +466,7 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
   .hand-stage { min-width: 5.5rem; }
   .table-meta > span:not(.status-pill) { display: none; }
   .theme-toggle { display: none; }
-  .table { width: min(86cqw, calc((100dvh - 12.5rem) * 1.62)); }
+  .table { width: min(86cqw, calc((100cqh - 5.5rem) * 1.62)); }
   .seat-card { min-width: 8.2rem; }
   .seat { transform: translate(-50%, -50%) scale(.88); }
   .table.seats-6 .seat, .table.seats-7 .seat, .table.seats-8 .seat { transform: translate(-50%, -50%) scale(.72); }
@@ -460,7 +475,7 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 @media (max-height: 760px) and (min-width: 621px) {
   .topbar { min-height: 3.8rem; padding-top: .55rem; padding-bottom: .55rem; }
   .play-area { padding-top: 2.35rem; padding-bottom: 1.8rem; }
-  .table { width: min(78cqw, 64rem, calc((100dvh - 10.8rem) * 1.85)); }
+  .table { width: min(78cqw, 64rem, calc((100cqh - 4.5rem) * 1.85)); }
   .action-dock { gap: .3rem; padding-top: .4rem; padding-bottom: .45rem; }
   .action-dock button, .match-finished, .auto-next-hand, .waiting-action { min-height: 2.6rem; }
   .notice { font-size: .66rem; }
@@ -516,12 +531,17 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
   .quick-row { display: grid; grid-template-columns: repeat(4, 1fr); }
   .replay-controls { grid-template-columns: repeat(2, 1fr); }
   .replay-controls input { grid-column: 1 / -1; }
+  .postgame-navigation { align-items: stretch; flex-direction: column; gap: .5rem; padding: .65rem; text-align: center; }
   .round-paused { gap: .55rem; }
   .round-paused > span { flex: 1; }
+  .bust-decision { grid-template-columns: 1fr; gap: .5rem; padding: .7rem; text-align: center; }
+  .bust-decision > div { display: grid; grid-template-columns: 1fr 1.25fr; }
+  .bust-decision button { padding: 0 .55rem; font-size: .72rem; }
   .match-settlement-backdrop { padding: .45rem; }
   .match-settlement { gap: .65rem; padding: 1rem .8rem .8rem; border-radius: .9rem; }
   .champion-block > span { width: 2.8rem; height: 2.8rem; }
-  .champion-block h2 { font-size: 1.15rem; }
+  .champion-block strong { font-size: 1.15rem; }
   .settlement-stats div { padding: .5rem .3rem; }
+  .standings-heading { grid-template-columns: minmax(0, 1fr) auto 3.8rem; gap: .35rem; padding: 0 .5rem; }
   .standings > div { grid-template-columns: 1.7rem minmax(0, 1fr) auto 3.8rem; gap: .35rem; padding: .45rem .5rem; }
 }

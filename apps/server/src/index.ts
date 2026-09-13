@@ -268,6 +268,11 @@ server.on('connection', (client) => {
       } else if (message.type === 'REQUEST_REBUY') {
         const room = service.requestRebuy(sessionToken);
         broadcastRoom(room.id);
+      } else if (message.type === 'DECLINE_REBUY') {
+        const room = service.declineRebuy(sessionToken);
+        scheduleRoom(room.id);
+        broadcastRoom(room.id);
+        broadcastLobby();
       } else if (message.type === 'RESOLVE_REBUY') {
         const room = service.resolveRebuy(sessionToken, message.playerId, message.approved);
         scheduleRoom(room.id);

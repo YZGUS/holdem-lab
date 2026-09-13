@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { HandReplay, PlayerView, TableView } from '@holdem/core';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('FOLD') }),
@@ -36,6 +36,7 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('RETURN_ROOM') }),
   z.object({ type: z.literal('DISBAND_ROOM') }),
   z.object({ type: z.literal('REQUEST_REBUY') }),
+  z.object({ type: z.literal('DECLINE_REBUY') }),
   z.object({ type: z.literal('RESOLVE_REBUY'), playerId: z.string().min(1).max(100), approved: z.boolean() }),
   z.object({ type: z.literal('START_GAME') }),
   z.object({
@@ -60,7 +61,7 @@ export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type RoomStatus = 'WAITING' | 'PLAYING' | 'PAUSED' | 'FINISHED';
 export type RoomPresence = 'AT_TABLE' | 'AWAY';
 export type GameMode = 'POINTS' | 'TOURNAMENT';
-export type RebuyStatus = 'NONE' | 'PENDING' | 'APPROVED';
+export type RebuyStatus = 'NONE' | 'PENDING' | 'APPROVED' | 'DECLINED';
 
 export interface RoomPlayerView {
   id: string;
@@ -112,7 +113,7 @@ export interface RoomView extends RoomSummary {
 
 export interface RoomLedgerEntry {
   index: number;
-  type: 'INITIAL_BUY_IN' | 'REBUY_REQUESTED' | 'REBUY_APPROVED' | 'REBUY_REJECTED' | 'REBUY_APPLIED';
+  type: 'INITIAL_BUY_IN' | 'REBUY_REQUESTED' | 'REBUY_APPROVED' | 'REBUY_REJECTED' | 'REBUY_APPLIED' | 'REBUY_DECLINED';
   playerId: string;
   amount?: number;
   text: string;

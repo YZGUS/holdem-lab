@@ -217,6 +217,72 @@ describe('room and session flow', () => {
     assert.throws(() => service.newHand(first.token), /整局已经结束/);
   });
 
+  it('finishes a points match when only one funded player remains and nobody can rebuy', () => {
+    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
+    const host = service.hello().session;
+    const room = service.createRoom(host.token, {
+      ...roomRequest('Alice'),
+      botCount: 1,
+      gameMode: 'POINTS',
+      rebuyEnabled: true,
+    });
+    service.startGame(host.token);
+    const bot = room.players.find((player) => player.kind === 'BOT')!;
+    room.game = createGame({
+      seed: 2,
+      handNumber: 1,
+      dealerIndex: 0,
+      smallBlind: 10,
+      bigBlind: 20,
+      players: [
+        { id: host.playerId, name: 'Alice', kind: 'HUMAN', stack: 100 },
+        { id: bot.id, name: bot.name, kind: 'BOT', stack: 20 },
+      ],
+    });
+
+    service.applyForPlayer(room.id, host.playerId, { type: 'CALL' });
+
+    assert.equal(bot.stack, 0);
+    assert.equal(room.status, 'FINISHED');
+  });
+
+  it('pauses for a busted human decision and finishes after they decline rebuying', () => {
+    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
+    const host = service.hello().session;
+    const room = service.createRoom(host.token, {
+      ...roomRequest('Alice'),
+      botCount: 1,
+      gameMode: 'POINTS',
+      rebuyEnabled: true,
+      maxRebuys: 1,
+    });
+    service.startGame(host.token);
+    const bot = room.players.find((player) => player.kind === 'BOT')!;
+    room.game = createGame({
+      seed: 0,
+      handNumber: 1,
+      dealerIndex: 0,
+      smallBlind: 10,
+      bigBlind: 20,
+      players: [
+        { id: host.playerId, name: 'Alice', kind: 'HUMAN', stack: 20 },
+        { id: bot.id, name: bot.name, kind: 'BOT', stack: 100 },
+      ],
+    });
+
+    service.applyForPlayer(room.id, host.playerId, { type: 'CALL' });
+    service.applyForPlayer(room.id, bot.id, { type: 'CHECK' });
+
+    assert.equal(room.players.find((player) => player.id === host.playerId)?.stack, 0);
+    assert.equal(room.status, 'PAUSED');
+
+    service.declineRebuy(host.token);
+
+    assert.equal(room.players.find((player) => player.id === host.playerId)?.rebuyStatus, 'DECLINED');
+    assert.equal(room.status, 'FINISHED');
+    assert.match(room.ledger.at(-1)?.text ?? '', /放弃本局/);
+  });
+
   it('keeps a busted member at the table as a spectator without exposing private cards', () => {
     const service = new RoomService(new MemoryPersistence<PersistedServerState>());
     const host = service.hello().session;
