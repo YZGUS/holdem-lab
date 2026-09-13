@@ -203,6 +203,11 @@ export function PokerTable({
   const thirdLabel = legal.types.includes('RAISE') ? '加注' : legal.types.includes('ALL_IN') ? '全下' : '加注';
   const act = (action: PlayerAction) => void onAction(action).catch(() => undefined);
   const toggleDrawer = (next: typeof drawer) => setDrawer((current) => current === next ? null : next);
+  const showSettlement = () => {
+    if (replay) onClearReplay();
+    setDrawer(null);
+    setSettlementOpen(true);
+  };
   const toggleCardTheme = () => setCardTheme((current) => {
     const next = current === 'classic' ? 'contrast' : 'classic';
     sessionStorage.setItem('holdem-card-theme', next);
@@ -263,7 +268,10 @@ export function PokerTable({
           {room.status === 'FINISHED' && <button className={drawer === 'replays' ? 'selected' : ''} aria-label={drawer === 'replays' ? '关闭回放面板' : '打开回放面板'} aria-expanded={drawer === 'replays'} onClick={() => toggleDrawer('replays')}>回放</button>}
         </nav>
         {drawer && <div className="drawer-content">
-          <div className="drawer-heading"><h2>{drawer === 'history' ? '牌局记录' : drawer === 'ranks' ? '牌型大小' : '整局回放'}</h2></div>
+          <div className="drawer-heading">
+            <h2>{drawer === 'history' ? '牌局记录' : drawer === 'ranks' ? '牌型大小' : '整局回放'}</h2>
+            {drawer === 'replays' && <button className="drawer-back" onClick={showSettlement}>返回排行榜</button>}
+          </div>
           {drawer === 'history' && <><h3>本手记录</h3><div className="history-list">{[...displayTable.recentHistory].reverse().map((entry) => <div key={entry.index}><span>{phaseNames[entry.phase]}</span><p>{entry.text}</p></div>)}</div><h3 className="ledger-title">筹码记录</h3><div className="history-list">{[...room.ledger].reverse().slice(0, 30).map((entry) => <div key={entry.index}><span>牌桌</span><p>{entry.text}</p></div>)}</div></>}
           {drawer === 'ranks' && <ol className="rank-list">{rankExamples.map((rank) => <li key={rank.name}><strong>{rank.name}</strong><div className="rank-example" aria-label={`${rank.name}示例`}>{rank.cards.map((card) => <CardFace card={card} small key={card} />)}</div></li>)}</ol>}
           {drawer === 'replays' && <><p className="drawer-empty">选择一手查看这一整局的过程。</p><div className="replay-list">{room.replays.map((item) => <button key={item.handId} onClick={() => onGetReplay(item.handId)}><strong>第 {item.handNumber} 手</strong><span>{item.resultText}</span><small>{item.actionCount} 次动作</small></button>)}</div></>}
@@ -295,7 +303,7 @@ export function PokerTable({
       />}
     </section>
 
-    <footer className="action-dock" aria-label="玩家操作">
+    {!browsingReplays && <footer className={`action-dock${drawer ? ' panel-open' : ''}`} aria-label={replay ? '回放控制' : '玩家操作'}>
       {isHost && pendingRebuys.length > 0 && <div className="rebuy-requests">{pendingRebuys.map((player) => <div key={player.id}><span>{player.name} 申请补充 {room.rebuyAmount.toLocaleString()}</span><button disabled={busy} onClick={() => onResolveRebuy(player.id, false)}>拒绝</button><button className="primary" disabled={busy} onClick={() => onResolveRebuy(player.id, true)}>批准</button></div>)}</div>}
       {replay ? <div className="replay-controls">
         <button onClick={() => setReplayStep((step) => Math.max(0, step - 1))}>上一步</button>
@@ -304,9 +312,6 @@ export function PokerTable({
         <span>{replayStep}/{replay.actions.length}</span>
         <button onClick={() => downloadReplay(replay)}>导出 JSON</button>
         <button onClick={onClearReplay}>退出回放</button>
-      </div> : browsingReplays ? <div className="postgame-navigation">
-        <span><strong>整局回放</strong>从右侧选择一手开始播放</span>
-        <button onClick={() => { setDrawer(null); setSettlementOpen(true); }}>返回排行榜</button>
       </div> : <>
         {raiseOpen && legal.minRaiseTo !== null && <div className="raise-panel" role="dialog" aria-label="加注设置"><div className="quick-row">{quickRaises.map((item) => <button key={item.label} onClick={() => setRaiseTo(item.value)}>{item.label}</button>)}<button onClick={() => setRaiseTo(legal.maxRaiseTo)}>全下</button></div><label><span>加注到</span><output>{raiseTo.toLocaleString()}</output><input type="range" min={legal.minRaiseTo} max={legal.maxRaiseTo} value={raiseTo} onChange={(event) => setRaiseTo(Number(event.target.value))} /></label><button className="confirm" onClick={() => act({ type: 'RAISE', raiseTo })}>确认加注</button></div>}
         {room.status === 'FINISHED' ? <button className="match-finished" onClick={() => setSettlementOpen(true)}>整局结束 · 查看排行榜</button>
@@ -319,6 +324,6 @@ export function PokerTable({
                   : <div className="main-actions"><button disabled={!can('FOLD')} onClick={() => act({ type: 'FOLD' })}>弃牌</button><button disabled={!can(mainAction.action.type)} onClick={() => act(mainAction.action)}>{mainAction.label}</button><button className="primary raise-trigger" disabled={!can('RAISE') && !can('ALL_IN')} onClick={() => legal.types.includes('RAISE') ? setRaiseOpen((open) => !open) : act({ type: 'ALL_IN' })}>{thirdLabel}</button></div>}
         <p className={notice?.tone === 'error' ? 'notice error' : 'notice'}>{notice ? <><span>{notice.message}</span><button aria-label="关闭提示" onClick={onDismissNotice}>×</button></> : busy ? '正在确认…' : canRequestRebuy ? '选择后由服务器判断继续牌局或进入最终结算' : isObserver ? observerText : isHeroTurn ? '请选择你的行动' : '当前操作区将在轮到你时出现'}</p>
       </>}
-    </footer>
+    </footer>}
   </main>;
 }

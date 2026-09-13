@@ -284,6 +284,7 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 .drawer-content { height: 100%; min-height: 0; padding: .9rem 4rem .9rem 1rem; overflow-y: auto; }
 .drawer-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: .8rem; }
 .drawer-heading h2 { margin: 0; font-size: 1rem; }
+.drawer-back { min-height: 2rem; padding: 0 .7rem; color: #f1d48d; border: 1px solid #c7a55b55; border-radius: .6rem; background: #183328; font-size: .68rem; font-weight: 700; }
 .drawer-content h3 { margin: 1rem 0 .45rem; color: #cdd7d1; font-size: .76rem; }
 .drawer-content h3:first-of-type { margin-top: 0; }
 .drawer-empty { color: var(--muted); font-size: .8rem; }
@@ -340,11 +341,6 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 .replay-controls button { min-height: 2.4rem; padding: 0 .7rem; font-size: .72rem; }
 .replay-controls input { width: 100%; accent-color: var(--gold); }
 .replay-controls span { color: #c8b680; font: .72rem/1 ui-monospace, monospace; }
-.postgame-navigation { min-height: 3rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .4rem .55rem .4rem .85rem; color: #dce5df; border: 1px solid #c7a55b55; border-radius: .75rem; background: #183328; }
-.postgame-navigation span { display: grid; gap: .12rem; color: #aebdb6; font-size: .68rem; }
-.postgame-navigation strong { color: #f1d48d; font-size: .82rem; }
-.postgame-navigation button { min-height: 2.25rem; padding: 0 .85rem; }
-
 .effect-card, .effect-flip-card, .effect-chip {
   position: fixed;
   z-index: 100;
@@ -458,6 +454,7 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 @media (min-width: 1100px) {
   .play-area.panel-open { padding-right: 23.5rem; }
   .play-area.panel-open .table { width: min(100cqw, 68rem, calc((100cqh - 6rem) * 1.78)); }
+  .action-dock.panel-open { width: min(52rem, calc(100% - 24rem)); justify-self: start; margin-left: max(1rem, calc((100% - 74rem) / 2)); }
 }
 
 @media (max-width: 900px) {
@@ -531,7 +528,6 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
   .quick-row { display: grid; grid-template-columns: repeat(4, 1fr); }
   .replay-controls { grid-template-columns: repeat(2, 1fr); }
   .replay-controls input { grid-column: 1 / -1; }
-  .postgame-navigation { align-items: stretch; flex-direction: column; gap: .5rem; padding: .65rem; text-align: center; }
   .round-paused { gap: .55rem; }
   .round-paused > span { flex: 1; }
   .bust-decision { grid-template-columns: 1fr; gap: .5rem; padding: .7rem; text-align: center; }
