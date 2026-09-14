@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createGame } from '@holdem/core';
-import { MemoryPersistence } from './persistence.js';
-import { RoomService, type PersistedServerState } from './room-service.js';
+import type { Principal } from './access-control.js';
+import { MemoryRoomRepository } from './storage.js';
+import { RoomService, type PersistedRoom } from './room-service.js';
 import { RoomEngine } from './room-engine.js';
+
+let userSequence = 0;
+function user(displayName = '玩家'): Principal {
+  userSequence += 1;
+  return { userId: `player-${userSequence}`, displayName, roles: ['PLAYER'] };
+}
 
 function roomRequest(playerName: string) {
   return {
@@ -26,16 +33,16 @@ function roomRequest(playerName: string) {
 
 describe('room and session flow', () => {
   it('creates, joins, restores and plays a room without leaking hidden cards', () => {
-    const persistence = new MemoryPersistence<PersistedServerState>();
+    const persistence = new MemoryRoomRepository<PersistedRoom>();
     const service = new RoomService(persistence);
-    const first = service.hello().session;
-    const room = service.createRoom(first.token, roomRequest('Alice'));
-    const second = service.hello().session;
-    service.joinRoom(second.token, room.id, 'Bob');
-    service.startGame(first.token);
+    const first = user();
+    const room = service.createRoom(first, roomRequest('Alice'));
+    const second = user();
+    service.joinRoom(second, room.id, 'Bob');
+    service.startGame(first);
 
-    const firstRoom = service.roomView(room.id, first.playerId);
-    const secondRoom = service.roomView(room.id, second.playerId);
+    const firstRoom = service.roomView(room.id, first.userId);
+    const secondRoom = service.roomView(room.id, second.userId);
     const firstView = firstRoom.view!;
     const secondView = secondRoom.view!;
     assert.equal(firstView.holeCards.length, 2);
@@ -46,80 +53,79 @@ describe('room and session flow', () => {
     assert.notDeepEqual(firstView.holeCards, secondView.holeCards);
 
     const restored = new RoomService(persistence);
-    const resumed = restored.hello(first.token);
-    assert.equal(resumed.resumed, true);
-    assert.equal(resumed.session.playerId, first.playerId);
-    assert.equal(resumed.session.roomId, room.id);
+    const resumed = restored.sessionView(first, 'restored-session');
+    assert.equal(resumed.playerId, first.userId);
+    assert.equal(resumed.roomId, room.id);
 
-    restored.setConnected(first.token, true);
+    restored.setConnected(first.userId, true);
     const game = restored.rooms.get(room.id)!.game!;
-    restored.act(first.token, { type: 'ACTION', actionId: 'first-action', handId: game.handId, expectedVersion: game.version, action: { type: 'CALL' } });
+    restored.act(first, { type: 'ACTION', actionId: 'first-action', handId: game.handId, expectedVersion: game.version, action: { type: 'CALL' } });
     assert.equal(restored.rooms.get(room.id)!.game!.version, game.version + 1);
   });
 
   it('rejects an action from a player whose turn has not arrived', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const first = service.hello().session;
-    const room = service.createRoom(first.token, roomRequest('Alice'));
-    const second = service.hello().session;
-    service.joinRoom(second.token, room.id, 'Bob');
-    service.startGame(first.token);
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const first = user();
+    const room = service.createRoom(first, roomRequest('Alice'));
+    const second = user();
+    service.joinRoom(second, room.id, 'Bob');
+    service.startGame(first);
     const game = room.game!;
 
-    assert.throws(() => service.act(second.token, {
+    assert.throws(() => service.act(second, {
       type: 'ACTION', actionId: 'wrong-turn', handId: game.handId, expectedVersion: game.version, action: { type: 'CHECK' },
     }), /还没轮到/);
   });
 
-  it('lets only the host disband a room and clears every member session', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const first = service.hello().session;
-    const room = service.createRoom(first.token, roomRequest('Alice'));
-    const second = service.hello().session;
-    service.joinRoom(second.token, room.id, 'Bob');
+  it('lets only the host disband a room and clears every membership', () => {
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const first = user();
+    const room = service.createRoom(first, roomRequest('Alice'));
+    const second = user();
+    service.joinRoom(second, room.id, 'Bob');
 
-    assert.throws(() => service.disbandRoom(second.token), /只有房主/);
-    const closed = service.disbandRoom(first.token);
+    assert.throws(() => service.disbandRoom(second), /只有房主/);
+    const closed = service.disbandRoom(first);
 
     assert.equal(closed.roomId, room.id);
     assert.equal(service.rooms.has(room.id), false);
-    assert.equal(service.session(first.token)?.roomId, undefined);
-    assert.equal(service.session(second.token)?.roomId, undefined);
+    assert.equal(service.roomForUser(first.userId), undefined);
+    assert.equal(service.roomForUser(second.userId), undefined);
   });
 
   it('keeps the seat on leave, pauses the room, and lets the same session return', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const first = service.hello().session;
-    const room = service.createRoom(first.token, roomRequest('Alice'));
-    const second = service.hello().session;
-    service.joinRoom(second.token, room.id, 'Bob');
-    service.startGame(first.token);
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const first = user();
+    const room = service.createRoom(first, roomRequest('Alice'));
+    const second = user();
+    service.joinRoom(second, room.id, 'Bob');
+    service.startGame(first);
 
-    service.leaveTable(first.token);
-    const departed = room.players.find((player) => player.id === first.playerId)!;
+    service.leaveTable(first);
+    const departed = room.players.find((player) => player.id === first.userId)!;
     assert.equal(departed.presence, 'AWAY');
-    assert.equal(service.session(first.token)?.roomId, room.id);
-    assert.equal(room.hostPlayerId, first.playerId);
+    assert.equal(service.roomForUser(first.userId)?.id, room.id);
+    assert.equal(room.hostPlayerId, first.userId);
     assert.equal(room.status, 'PAUSED');
     assert.equal(room.game!.currentPlayerIndex, null);
 
-    service.returnToRoom(first.token);
+    service.returnToRoom(first);
     assert.equal(departed.presence, 'AT_TABLE');
     assert.equal(room.status, 'PLAYING');
   });
 
   it('folds an out-of-turn leaver through the rules engine and excludes them from later hands', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const first = service.hello().session;
-    const room = service.createRoom(first.token, { ...roomRequest('Alice'), maxPlayers: 3 });
-    const second = service.hello().session;
-    const third = service.hello().session;
-    service.joinRoom(second.token, room.id, 'Bob');
-    service.joinRoom(third.token, room.id, 'Carol');
-    service.startGame(first.token);
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const first = user();
+    const room = service.createRoom(first, { ...roomRequest('Alice'), maxPlayers: 3 });
+    const second = user();
+    const third = user();
+    service.joinRoom(second, room.id, 'Bob');
+    service.joinRoom(third, room.id, 'Carol');
+    service.startGame(first);
 
-    service.leaveTable(second.token);
-    assert.equal(room.game!.players.find((player) => player.id === second.playerId)?.folded, true);
+    service.leaveTable(second);
+    assert.equal(room.game!.players.find((player) => player.id === second.userId)?.folded, true);
     assert.equal(room.status, 'PLAYING');
     while (room.game!.phase !== 'FINISHED') {
       const actorId = room.game!.players[room.game!.currentPlayerIndex!].id;
@@ -128,17 +134,17 @@ describe('room and session flow', () => {
     }
     service.advanceHand(room.id);
 
-    assert.equal(room.players.some((player) => player.id === second.playerId), true);
-    assert.deepEqual(room.game!.players.map((player) => player.id).sort(), [first.playerId, third.playerId].sort());
+    assert.equal(room.players.some((player) => player.id === second.userId), true);
+    assert.deepEqual(room.game!.players.map((player) => player.id).sort(), [first.userId, third.userId].sort());
   });
 
   it('pauses restored rooms with no online human and expires the whole membership after the grace period', () => {
     let now = 100;
-    const persistence = new MemoryPersistence<PersistedServerState>();
+    const persistence = new MemoryRoomRepository<PersistedRoom>();
     const service = new RoomService(persistence, new RoomEngine(1_000), () => now);
-    const host = service.hello().session;
-    const room = service.createRoom(host.token, { ...roomRequest('Alice'), botCount: 1 });
-    service.startGame(host.token);
+    const host = user();
+    const room = service.createRoom(host, { ...roomRequest('Alice'), botCount: 1 });
+    service.startGame(host);
 
     const restored = new RoomService(persistence, new RoomEngine(1_000), () => now);
     assert.equal(restored.rooms.get(room.id)?.status, 'PAUSED');
@@ -148,39 +154,39 @@ describe('room and session flow', () => {
     const closed = restored.expireInactiveRoom(room.id);
     assert.equal(closed?.roomId, room.id);
     assert.equal(restored.rooms.has(room.id), false);
-    assert.equal(restored.session(host.token)?.roomId, undefined);
+    assert.equal(restored.roomForUser(host.userId), undefined);
   });
 
   it('resumes an unfinished hand when an all-in player reconnects with zero remaining stack', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const host = service.hello().session;
-    const room = service.createRoom(host.token, {
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const host = user();
+    const room = service.createRoom(host, {
       ...roomRequest('Alice'),
       botCount: 1,
       gameMode: 'POINTS',
       rebuyEnabled: true,
     });
-    service.startGame(host.token);
+    service.startGame(host);
 
-    service.applyForPlayer(room.id, host.playerId, { type: 'ALL_IN' });
+    service.applyForPlayer(room.id, host.userId, { type: 'ALL_IN' });
     assert.equal(room.game!.phase, 'PRE_FLOP');
-    assert.equal(room.players.find((player) => player.id === host.playerId)!.stack, 0);
+    assert.equal(room.players.find((player) => player.id === host.userId)!.stack, 0);
 
-    service.setConnected(host.token, false);
+    service.setConnected(host.userId, false);
     assert.equal(room.status, 'PAUSED');
-    service.setConnected(host.token, true);
+    service.setConnected(host.userId, true);
     assert.equal(room.status, 'PLAYING');
     assert.equal(room.pauseReason, null);
   });
 
   it('advances from a finished hand without a host action', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const first = service.hello().session;
-    const room = service.createRoom(first.token, roomRequest('Alice'));
-    const second = service.hello().session;
-    service.joinRoom(second.token, room.id, 'Bob');
-    service.startGame(first.token);
-    service.applyForPlayer(room.id, first.playerId, { type: 'FOLD' });
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const first = user();
+    const room = service.createRoom(first, roomRequest('Alice'));
+    const second = user();
+    service.joinRoom(second, room.id, 'Bob');
+    service.startGame(first);
+    service.applyForPlayer(room.id, first.userId, { type: 'FOLD' });
 
     assert.equal(room.game!.phase, 'FINISHED');
     service.advanceHand(room.id);
@@ -190,12 +196,12 @@ describe('room and session flow', () => {
   });
 
   it('ends the whole game after the last funded player wins and only then exposes replays', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const first = service.hello().session;
-    const room = service.createRoom(first.token, roomRequest('Alice'));
-    const second = service.hello().session;
-    service.joinRoom(second.token, room.id, 'Bob');
-    service.startGame(first.token);
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const first = user();
+    const room = service.createRoom(first, roomRequest('Alice'));
+    const second = user();
+    service.joinRoom(second, room.id, 'Bob');
+    service.startGame(first);
 
     room.game = createGame({
       seed: 2,
@@ -203,30 +209,30 @@ describe('room and session flow', () => {
       smallBlind: 10,
       bigBlind: 20,
       players: [
-        { id: first.playerId, name: 'Alice', kind: 'HUMAN', stack: 100 },
-        { id: second.playerId, name: 'Bob', kind: 'HUMAN', stack: 20 },
+        { id: first.userId, name: 'Alice', kind: 'HUMAN', stack: 100 },
+        { id: second.userId, name: 'Bob', kind: 'HUMAN', stack: 20 },
       ],
     });
-    assert.throws(() => service.replay(first.token, room.game!.handId), /整局结束后/);
+    assert.throws(() => service.replay(first, room.game!.handId), /整局结束后/);
 
-    service.applyForPlayer(room.id, first.playerId, { type: 'CALL' });
+    service.applyForPlayer(room.id, first.userId, { type: 'CALL' });
 
     assert.equal(room.status, 'FINISHED');
     assert.equal(room.replays.length, 1);
-    assert.equal(service.replay(first.token, room.game!.handId).handId, room.game!.handId);
-    assert.throws(() => service.newHand(first.token), /整局已经结束/);
+    assert.equal(service.replay(first, room.game!.handId).handId, room.game!.handId);
+    assert.throws(() => service.newHand(first), /整局已经结束/);
   });
 
   it('finishes a points match when only one funded player remains and nobody can rebuy', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const host = service.hello().session;
-    const room = service.createRoom(host.token, {
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const host = user();
+    const room = service.createRoom(host, {
       ...roomRequest('Alice'),
       botCount: 1,
       gameMode: 'POINTS',
       rebuyEnabled: true,
     });
-    service.startGame(host.token);
+    service.startGame(host);
     const bot = room.players.find((player) => player.kind === 'BOT')!;
     room.game = createGame({
       seed: 2,
@@ -235,28 +241,28 @@ describe('room and session flow', () => {
       smallBlind: 10,
       bigBlind: 20,
       players: [
-        { id: host.playerId, name: 'Alice', kind: 'HUMAN', stack: 100 },
+        { id: host.userId, name: 'Alice', kind: 'HUMAN', stack: 100 },
         { id: bot.id, name: bot.name, kind: 'BOT', stack: 20 },
       ],
     });
 
-    service.applyForPlayer(room.id, host.playerId, { type: 'CALL' });
+    service.applyForPlayer(room.id, host.userId, { type: 'CALL' });
 
     assert.equal(bot.stack, 0);
     assert.equal(room.status, 'FINISHED');
   });
 
   it('pauses for a busted human decision and finishes after they decline rebuying', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const host = service.hello().session;
-    const room = service.createRoom(host.token, {
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const host = user();
+    const room = service.createRoom(host, {
       ...roomRequest('Alice'),
       botCount: 1,
       gameMode: 'POINTS',
       rebuyEnabled: true,
       maxRebuys: 1,
     });
-    service.startGame(host.token);
+    service.startGame(host);
     const bot = room.players.find((player) => player.kind === 'BOT')!;
     room.game = createGame({
       seed: 0,
@@ -265,39 +271,39 @@ describe('room and session flow', () => {
       smallBlind: 10,
       bigBlind: 20,
       players: [
-        { id: host.playerId, name: 'Alice', kind: 'HUMAN', stack: 20 },
+        { id: host.userId, name: 'Alice', kind: 'HUMAN', stack: 20 },
         { id: bot.id, name: bot.name, kind: 'BOT', stack: 100 },
       ],
     });
 
-    service.applyForPlayer(room.id, host.playerId, { type: 'CALL' });
+    service.applyForPlayer(room.id, host.userId, { type: 'CALL' });
     service.applyForPlayer(room.id, bot.id, { type: 'CHECK' });
 
-    assert.equal(room.players.find((player) => player.id === host.playerId)?.stack, 0);
+    assert.equal(room.players.find((player) => player.id === host.userId)?.stack, 0);
     assert.equal(room.status, 'PAUSED');
 
-    service.declineRebuy(host.token);
+    service.declineRebuy(host);
 
-    assert.equal(room.players.find((player) => player.id === host.playerId)?.rebuyStatus, 'DECLINED');
+    assert.equal(room.players.find((player) => player.id === host.userId)?.rebuyStatus, 'DECLINED');
     assert.equal(room.status, 'FINISHED');
     assert.match(room.ledger.at(-1)?.text ?? '', /放弃本局/);
   });
 
   it('keeps a busted member at the table as a spectator without exposing private cards', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const host = service.hello().session;
-    const room = service.createRoom(host.token, {
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const host = user();
+    const room = service.createRoom(host, {
       ...roomRequest('Alice'),
       maxPlayers: 3,
       botCount: 1,
       gameMode: 'POINTS',
       rebuyEnabled: true,
     });
-    const busted = service.hello().session;
-    service.joinRoom(busted.token, room.id, 'Bob');
-    service.startGame(host.token);
+    const busted = user();
+    service.joinRoom(busted, room.id, 'Bob');
+    service.startGame(host);
 
-    room.players.find((player) => player.id === busted.playerId)!.stack = 0;
+    room.players.find((player) => player.id === busted.userId)!.stack = 0;
     room.handNumber = 2;
     room.game = createGame({
       seed: 31,
@@ -305,11 +311,11 @@ describe('room and session flow', () => {
       smallBlind: room.smallBlind,
       bigBlind: room.bigBlind,
       players: room.players
-        .filter((player) => player.id !== busted.playerId)
+        .filter((player) => player.id !== busted.userId)
         .map(({ id, name, kind, stack }) => ({ id, name, kind, stack })),
     });
 
-    const spectator = service.roomView(room.id, busted.playerId);
+    const spectator = service.roomView(room.id, busted.userId);
     assert.ok(spectator.table);
     assert.equal(spectator.table.handNumber, 2);
     assert.equal(spectator.view, undefined);
@@ -318,9 +324,9 @@ describe('room and session flow', () => {
   });
 
   it('applies an approved rebuy at a hand boundary and returns the member next hand', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const host = service.hello().session;
-    const room = service.createRoom(host.token, {
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const host = user();
+    const room = service.createRoom(host, {
       ...roomRequest('Alice'),
       maxPlayers: 3,
       botCount: 1,
@@ -329,11 +335,11 @@ describe('room and session flow', () => {
       rebuyAmount: 1000,
       maxRebuys: 2,
     });
-    const busted = service.hello().session;
-    service.joinRoom(busted.token, room.id, 'Bob');
-    service.startGame(host.token);
+    const busted = user();
+    service.joinRoom(busted, room.id, 'Bob');
+    service.startGame(host);
 
-    const bustedPlayer = room.players.find((player) => player.id === busted.playerId)!;
+    const bustedPlayer = room.players.find((player) => player.id === busted.userId)!;
     bustedPlayer.stack = 0;
     room.game = createGame({
       seed: 41,
@@ -341,13 +347,13 @@ describe('room and session flow', () => {
       smallBlind: room.smallBlind,
       bigBlind: room.bigBlind,
       players: room.players
-        .filter((player) => player.id !== busted.playerId)
+        .filter((player) => player.id !== busted.userId)
         .map(({ id, name, kind, stack }) => ({ id, name, kind, stack })),
     });
 
-    service.requestRebuy(busted.token);
+    service.requestRebuy(busted);
     assert.equal(bustedPlayer.rebuyStatus, 'PENDING');
-    service.resolveRebuy(host.token, busted.playerId, true);
+    service.resolveRebuy(host, busted.userId, true);
     assert.equal(bustedPlayer.rebuyStatus, 'APPROVED');
     assert.equal(bustedPlayer.stack, 0);
 
@@ -357,29 +363,29 @@ describe('room and session flow', () => {
     assert.equal(bustedPlayer.buyInTotal, 3000);
     assert.equal(bustedPlayer.rebuyCount, 1);
     assert.equal(bustedPlayer.rebuyStatus, 'NONE');
-    assert.equal(room.ledger.filter((entry) => entry.playerId === busted.playerId).map((entry) => entry.type).at(-1), 'REBUY_APPLIED');
+    assert.equal(room.ledger.filter((entry) => entry.playerId === busted.userId).map((entry) => entry.type).at(-1), 'REBUY_APPLIED');
 
     service.advanceHand(room.id);
-    assert.ok(service.roomView(room.id, busted.playerId).view);
+    assert.ok(service.roomView(room.id, busted.userId).view);
   });
 
   it('finishes the match after the configured hand limit', () => {
-    const service = new RoomService(new MemoryPersistence<PersistedServerState>());
-    const host = service.hello().session;
-    const room = service.createRoom(host.token, {
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const host = user();
+    const room = service.createRoom(host, {
       ...roomRequest('Alice'),
       gameMode: 'POINTS',
       maxHands: 1,
     });
-    const second = service.hello().session;
-    service.joinRoom(second.token, room.id, 'Bob');
-    service.startGame(host.token);
+    const second = user();
+    service.joinRoom(second, room.id, 'Bob');
+    service.startGame(host);
 
     const actorId = room.game!.players[room.game!.currentPlayerIndex!].id;
     service.applyForPlayer(room.id, actorId, { type: 'FOLD' });
 
     assert.equal(room.handNumber, 1);
     assert.equal(room.status, 'FINISHED');
-    assert.equal(service.roomView(room.id, host.playerId).table?.phase, 'FINISHED');
+    assert.equal(service.roomView(room.id, host.userId).table?.phase, 'FINISHED');
   });
 });

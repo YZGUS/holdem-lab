@@ -48,6 +48,15 @@ h1 { margin-bottom: 0; font-size: 1.2rem; font-weight: 680; }
 .confirm-actions .confirm-danger { color: #fff1ef; border-color: #e4776d88; background: #943f38; }
 .confirm-actions .confirm-danger:hover { background: #a94a42; }
 
+.auth-shell { min-height: 100dvh; display: grid; place-items: center; padding: 1.25rem; background: radial-gradient(circle at 50% 20%, #17433488, transparent 45%); }
+.auth-card { width: min(28rem, 100%); padding: clamp(1.25rem, 5vw, 2rem); border: 1px solid #c7a55b44; border-radius: 1.15rem; background: #06130ff2; box-shadow: 0 1.5rem 4rem #0008; }
+.auth-card h1 { margin-bottom: .6rem; font-size: clamp(1.45rem, 4vw, 2rem); }
+.auth-card > p:not(.eyebrow, .auth-error) { color: var(--muted); line-height: 1.6; }
+.auth-card form { display: grid; gap: .9rem; margin-top: 1.25rem; }
+.auth-card label { display: grid; gap: .45rem; color: #b8c5be; font-size: .8rem; }
+.auth-card input { min-height: 3rem; padding: 0 .85rem; color: #f5f1e8; border: 1px solid var(--line); border-radius: .75rem; background: #ffffff08; letter-spacing: .12em; }
+.auth-error { margin: .85rem 0 0; color: #f2aaa2; font-size: .78rem; }
+
 .lobby-shell { height: 100dvh; overflow-y: auto; padding: clamp(1.2rem, 3vw, 3rem); background: radial-gradient(circle at 75% 10%, #17433455, transparent 40%); }
 .lobby-header { max-width: 74rem; display: flex; justify-content: space-between; align-items: flex-start; margin: 0 auto 2rem; }
 .lobby-header h1 { font-size: clamp(1.7rem, 3vw, 2.6rem); }

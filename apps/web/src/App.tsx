@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { ActionType, PlayerAction, PlayerView, TableView } from '@holdem/core';
+import { CloudLogin } from './CloudLogin';
 import { Lobby } from './Lobby';
 import { PokerTable } from './PokerTable';
 import { WaitingRoom } from './WaitingRoom';
@@ -46,6 +47,14 @@ export function App() {
     }, { signal: lifecycle.signal })).catch(() => undefined);
     return () => lifecycle.abort();
   }, []);
+
+  if (client.authentication !== 'AUTHENTICATED') {
+    return <CloudLogin
+      checking={client.authentication === 'CHECKING'}
+      error={client.authenticationError}
+      onLogin={client.loginWithInvite}
+    />;
+  }
 
   if (!client.room) {
     return <Lobby

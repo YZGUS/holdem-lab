@@ -18,6 +18,8 @@ export interface ClientNotice {
   tone: 'info' | 'error';
 }
 
+export type AuthenticationState = 'CHECKING' | 'AUTHENTICATED' | 'REQUIRED';
+
 function websocketUrl() {
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL as string;
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -31,6 +33,8 @@ export function useGameClient() {
   const noticeIdRef = useRef(0);
   const pendingActionRef = useRef<{ resolve: (table: TableView) => void; reject: (error: Error) => void; timer: number } | null>(null);
   const [connection, setConnection] = useState<'CONNECTING' | 'OPEN' | 'CLOSED'>('CONNECTING');
+  const [authentication, setAuthentication] = useState<AuthenticationState>('CHECKING');
+  const [authenticationError, setAuthenticationError] = useState<string | null>(null);
   const [session, setSession] = useState<SessionView | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [room, setRoom] = useState<RoomView | null>(null);
@@ -61,6 +65,26 @@ export function useGameClient() {
 
   useEffect(() => {
     let disposed = false;
+    void fetch('/api/auth/status', { credentials: 'same-origin', cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('无法确认登录状态');
+        return response.json() as Promise<{ authenticated: boolean }>;
+      })
+      .then((status) => {
+        if (!disposed) setAuthentication(status.authenticated ? 'AUTHENTICATED' : 'REQUIRED');
+      })
+      .catch(() => {
+        if (!disposed) {
+          setAuthenticationError('无法连接身份服务');
+          setAuthentication('REQUIRED');
+        }
+      });
+    return () => { disposed = true; };
+  }, []);
+
+  useEffect(() => {
+    if (authentication !== 'AUTHENTICATED') return;
+    let disposed = false;
     let initialConnectTimer = 0;
     const connect = () => {
       setConnection('CONNECTING');
@@ -75,7 +99,8 @@ export function useGameClient() {
       socket.onmessage = (event) => {
         const message = JSON.parse(event.data) as ServerMessage;
         if (message.type === 'WELCOME') {
-          sessionStorage.setItem(sessionKey, message.session.token);
+          if (message.session.token) sessionStorage.setItem(sessionKey, message.session.token);
+          else sessionStorage.removeItem(sessionKey);
           setSession(message.session);
         } else if (message.type === 'LOBBY') {
           setSession(message.session);
@@ -131,8 +156,24 @@ export function useGameClient() {
       };
       socket.onclose = () => {
         if (disposed) return;
+        if (socketRef.current === socket) socketRef.current = null;
         setConnection('CLOSED');
-        reconnectRef.current = window.setTimeout(connect, 1200);
+        void fetch('/api/auth/status', { credentials: 'same-origin', cache: 'no-store' })
+          .then(async (response) => response.ok ? response.json() as Promise<{ authenticated: boolean }> : { authenticated: true })
+          .then((status) => {
+            if (disposed) return;
+            if (!status.authenticated) {
+              sessionStorage.removeItem(sessionKey);
+              setSession(null);
+              setAuthenticationError('登录已过期，请重新输入邀请码');
+              setAuthentication('REQUIRED');
+              return;
+            }
+            reconnectRef.current = window.setTimeout(connect, 1200);
+          })
+          .catch(() => {
+            if (!disposed) reconnectRef.current = window.setTimeout(connect, 1200);
+          });
       };
     };
     // Defer the first side effect so React StrictMode can complete its
@@ -146,7 +187,7 @@ export function useGameClient() {
       socketRef.current = null;
       if (socket && socket.readyState !== WebSocket.CLOSED) socket.close();
     };
-  }, [clearNotice, showNotice]);
+  }, [authentication, clearNotice, showNotice]);
 
   useEffect(() => () => window.clearTimeout(noticeTimerRef.current), []);
 
@@ -211,7 +252,25 @@ export function useGameClient() {
     }
   }, [send]);
 
+  const loginWithInvite = useCallback(async (code: string) => {
+    setAuthenticationError(null);
+    const response = await fetch('/api/auth/invite', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const result = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      const message = result.error ?? '邀请码登录失败';
+      setAuthenticationError(message);
+      throw new Error(message);
+    }
+    setAuthentication('AUTHENTICATED');
+  }, []);
+
   return {
+    authentication, authenticationError, loginWithInvite,
     connection, session, rooms, room, table, view, replay, simulation, busy, notice,
     clearReplay: () => setReplay(null),
     clearNotice,

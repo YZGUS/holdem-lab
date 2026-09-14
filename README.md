@@ -175,8 +175,23 @@ curl http://127.0.0.1:8787/health
 正常响应示例：
 
 ```json
-{"ok":true,"rooms":0}
+{"ok":true,"rooms":0,"mode":"local"}
 ```
+
+### 云端受邀模式
+
+公网部署时启用 `cloud` 模式。玩家必须先输入邀请码，服务端随后通过 HttpOnly Cookie 维持登录；房间配额绑定稳定用户身份，清除或更换浏览器 Session 也不会重置配额。
+
+```bash
+HOLDEM_DEPLOYMENT_MODE=cloud \
+HOLDEM_INVITE_CODES='Alice:请替换为高强度邀请码,Bob:请替换为另一个邀请码' \
+HOLDEM_ALLOWED_ORIGINS='https://cards.example.com' \
+HOLDEM_COOKIE_SECURE=true \
+PORT=8787 \
+npm start
+```
+
+`HOLDEM_INVITE_CODES` 使用“显示名:邀请码”，多名玩家以逗号分隔。公网正式环境应通过 HTTPS 反向代理访问，并让 `HOLDEM_ALLOWED_ORIGINS` 与实际网页来源完全一致。
 
 ## 常见问题
 
@@ -231,9 +246,29 @@ PORT=8787 npm start
 | 变量 | 默认值 | 作用 |
 | --- | --- | --- |
 | `PORT` | `8787` | 生产 HTTP 与 WebSocket 端口 |
-| `HOLDEM_DATA_FILE` | `.data/server-state.json` | 房间、会话与牌局 JSON 保存位置 |
+| `HOLDEM_DEPLOYMENT_MODE` | `local` | `local` 匿名局域网模式，或 `cloud` 受邀认证模式 |
+| `HOLDEM_DATA_DIR` | `.data/holdem` | 分离保存房间与会话的目录 |
 | `HOLDEM_WEB_DIST` | `apps/web/dist` | Web 构建文件目录 |
+| `HOLDEM_INVITE_CODES` | 无 | 云端邀请码，格式为 `Alice:code-1,Bob:code-2` |
+| `HOLDEM_ALLOWED_ORIGINS` | 当前站点 | 云端允许建立 WebSocket 的网页来源，多个值以逗号分隔 |
+| `HOLDEM_SESSION_TTL_MS` | `86400000` | 云端登录有效期，过半时自动续期 |
+| `HOLDEM_MAX_SESSIONS_PER_USER` | `8` | 单个云端用户保留的浏览器会话数 |
+| `HOLDEM_MAX_CONNECTIONS_PER_USER` | 云端 `3` | 单个用户允许的同时连接数 |
+| `HOLDEM_MAX_CONNECTIONS_PER_IP` | 云端 `12` | 单个 IP 允许的同时连接数 |
+| `HOLDEM_MAX_ROOMS_PER_USER` | `1` | 单个稳定用户可创建的房间数 |
+| `HOLDEM_MAX_ROOMS` | 云端 `100` | 全服房间数上限 |
+| `HOLDEM_MAX_MESSAGE_BYTES` | `32768` | 单条 WebSocket 消息大小上限 |
+| `HOLDEM_ENABLE_SIMULATION` | 本地开启、云端关闭 | 是否允许服务端运行批量模拟 |
+| `HOLDEM_COOKIE_SECURE` | `false` | HTTPS 部署时设为 `true` |
 | `VITE_WS_URL` | 同源 `/ws` | Web 与牌局服务分开部署时的 WebSocket 地址 |
+
+## 架构与状态流转
+
+请求先经过部署模式识别、身份认证和统一安全入口，再进入房间服务与规则引擎。蓝色模块表示可替换接口：当前本地模式使用匿名身份，云端模式使用邀请码；以后可单独替换 GitHub OAuth、Redis 或数据库，无需让房间服务理解 Cookie、邀请码等认证细节。
+
+![云端安全架构与状态流转](docs/assets/architecture-security-state-flow.png)
+
+`SessionStore`、`RoomRepository` 和 `RateLimitStore` 各自负责会话、房间与限流状态。JSON 实现按实体单独写盘，避免每次操作重写全部牌局；云端多实例部署可分别换成 Redis 或数据库。Session 支持续期、撤销、过期清理；统一入口负责 Origin、消息大小、连接数、操作频率及房间配额检查。规则引擎和 `GameState` 不参与认证，也没有因本次安全改造改变牌局规则。
 
 ## 项目结构
 
@@ -254,4 +289,4 @@ npm test
 npm run build
 ```
 
-当前 JSON 持久化适用于单机和单实例部署。多实例部署可通过 `PersistenceAdapter` 更换为数据库或共享存储。
+当前 JSON 存储适用于单机和单实例部署。多实例部署时可分别实现 `SessionStore`、`RoomRepository` 和 `RateLimitStore`，接入 Redis 或数据库。

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { HandReplay, PlayerView, TableView } from '@holdem/core';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('FOLD') }),
@@ -120,7 +120,7 @@ export interface RoomLedgerEntry {
 }
 
 export interface SessionView {
-  token: string;
+  token?: string;
   playerId: string;
   name: string;
   roomId?: string;

@@ -1,27 +1,128 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WebSocket, WebSocketServer } from 'ws';
-import { decisionContext, type PlayerAction } from '@holdem/core';
-import { createDefaultStrategyRegistry, runSimulation } from '@holdem/bot';
-import { clientMessageSchema, type ServerMessage } from '@holdem/protocol';
-import { JsonFilePersistence } from './persistence.js';
-import { RoomService, type PersistedServerState } from './room-service.js';
+import { WebSocketServer } from 'ws';
+import {
+  AccessGateway,
+  AnonymousAuthProvider,
+  DeploymentPolicy,
+  InviteCodeAuthProvider,
+  type AuthProvider,
+} from './access-control.js';
+import { GameServer } from './game-server.js';
+import { migrateLegacyState } from './legacy-migration.js';
+import { RoomService, type PersistedRoom } from './room-service.js';
+import {
+  JsonDirectoryRoomRepository,
+  JsonDirectorySessionStore,
+  MemoryRateLimitStore,
+  type SessionStore,
+} from './storage.js';
 
 const port = Number(process.env.PORT ?? 8787);
 const workspaceRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
-const dataFile = process.env.HOLDEM_DATA_FILE ?? join(workspaceRoot, '.data', 'server-state.json');
+const dataDirectory = process.env.HOLDEM_DATA_DIR ?? join(workspaceRoot, '.data', 'holdem');
 const webDist = process.env.HOLDEM_WEB_DIST ?? join(workspaceRoot, 'apps', 'web', 'dist');
-const service = new RoomService(new JsonFilePersistence<PersistedServerState>(dataFile));
-const strategies = createDefaultStrategyRegistry();
-const mimeTypes: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
+const deployment = new DeploymentPolicy();
+const roomRepository = new JsonDirectoryRoomRepository<PersistedRoom>(join(dataDirectory, 'rooms'));
+const sessionStore: SessionStore = new JsonDirectorySessionStore(join(dataDirectory, 'sessions'));
+if (deployment.mode === 'local') {
+  migrateLegacyState(join(workspaceRoot, '.data', 'server-state.json'), roomRepository, sessionStore);
+}
+const auth: AuthProvider = deployment.mode === 'cloud'
+  ? new InviteCodeAuthProvider(sessionStore)
+  : new AnonymousAuthProvider(sessionStore);
+const service = new RoomService(roomRepository);
+const gateway = new AccessGateway(deployment, auth, new MemoryRateLimitStore(), service);
+
+const mimeTypes: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.mp3': 'audio/mpeg',
+};
+
 const httpServer = createServer(async (request, response) => {
-  if (request.url === '/health') {
-    response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ ok: true, rooms: service.rooms.size }));
-    return;
+  try {
+    if (request.url === '/health') {
+      json(response, 200, { ok: true, rooms: service.roomCount(), mode: deployment.mode });
+      return;
+    }
+    if (request.url === '/api/auth/status' && request.method === 'GET') {
+      if (deployment.mode === 'local') {
+        json(response, 200, { mode: 'local', authenticated: true });
+        return;
+      }
+      try {
+        auth.authenticate(request);
+        json(response, 200, { mode: 'cloud', authenticated: true });
+      } catch {
+        json(response, 200, { mode: 'cloud', authenticated: false });
+      }
+      return;
+    }
+    if (request.url === '/api/auth/invite' && request.method === 'POST') {
+      if (!(auth instanceof InviteCodeAuthProvider)) {
+        json(response, 404, { error: '本地模式不需要登录' });
+        return;
+      }
+      gateway.authorizeLogin(request);
+      const body = await readJsonBody(request, 4 * 1024) as { code?: unknown };
+      if (typeof body.code !== 'string') {
+        json(response, 400, { error: '请输入邀请码' });
+        return;
+      }
+      const identity = auth.login(body.code.trim());
+      response.setHeader('set-cookie', auth.cookie(identity.sessionId, secureCookie(request)));
+      json(response, 200, { authenticated: true });
+      return;
+    }
+    if (request.url === '/api/auth/logout' && request.method === 'POST') {
+      if (auth instanceof InviteCodeAuthProvider) {
+        auth.logout(request);
+        response.setHeader('set-cookie', auth.clearCookie(secureCookie(request)));
+      }
+      json(response, 200, { authenticated: false });
+      return;
+    }
+    await serveStatic(request, response);
+  } catch (error) {
+    const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
+    json(response, statusCode, { error: error instanceof Error ? error.message : '请求失败' });
   }
+});
+
+const socketServer = new WebSocketServer({
+  server: httpServer,
+  path: '/ws',
+  maxPayload: deployment.maxPayloadBytes,
+  verifyClient(info, done) {
+    try {
+      if (!deployment.acceptsOrigin(info.req)) throw new Error('请求来源不被允许');
+      if (deployment.mode === 'cloud') auth.authenticate(info.req);
+      done(true);
+    } catch {
+      done(false, 401, 'Unauthorized');
+    }
+  },
+});
+const gameServer = new GameServer(socketServer, service, gateway);
+
+httpServer.on('listening', () => {
+  console.log(`Holdem server listening on http://0.0.0.0:${port} (${deployment.mode})`);
+  gameServer.start();
+});
+
+httpServer.on('close', () => gameServer.stop());
+httpServer.listen(port, '0.0.0.0');
+
+async function serveStatic(request: IncomingMessage, response: ServerResponse) {
   const pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
   const relativePath = pathname === '/' ? 'index.html' : pathname.slice(1);
   const basePath = resolve(webDist);
@@ -45,282 +146,32 @@ const httpServer = createServer(async (request, response) => {
       response.end('Web build is unavailable. Run npm run build first.');
     }
   }
-});
-const server = new WebSocketServer({ server: httpServer, path: '/ws' });
-const clientTokens = new Map<WebSocket, string>();
-const tokenClients = new Map<string, WebSocket>();
-const turnTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const nextHandDelay = 2_500;
-
-function send(client: WebSocket, message: ServerMessage) {
-  if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(message));
 }
 
-function sendLobby(client: WebSocket, sessionToken: string) {
-  const session = service.session(sessionToken);
-  if (session) send(client, { type: 'LOBBY', session: service.sessionView(sessionToken), rooms: service.listRooms(session.playerId) });
+function json(response: ServerResponse, statusCode: number, value: unknown) {
+  response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  response.end(JSON.stringify(value));
 }
 
-function sendRoom(client: WebSocket, roomId: string, playerId: string) {
+async function readJsonBody(request: IncomingMessage, limit: number) {
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > limit) throw Object.assign(new Error('请求内容过大'), { statusCode: 413 });
+    chunks.push(buffer);
+  }
   try {
-    send(client, { type: 'ROOM', ...service.roomView(roomId, playerId) });
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
   } catch {
-    const sessionToken = clientTokens.get(client);
-    if (sessionToken) sendLobby(client, sessionToken);
+    throw Object.assign(new Error('请求格式无效'), { statusCode: 400 });
   }
 }
 
-function broadcastLobby() {
-  for (const [client, sessionToken] of clientTokens) {
-    if (!service.isAtTable(sessionToken)) sendLobby(client, sessionToken);
-  }
+function secureCookie(request: IncomingMessage) {
+  const forwarded = Array.isArray(request.headers['x-forwarded-proto'])
+    ? request.headers['x-forwarded-proto'][0]
+    : request.headers['x-forwarded-proto']?.split(',')[0]?.trim();
+  return process.env.HOLDEM_COOKIE_SECURE === 'true' || forwarded === 'https';
 }
-
-function broadcastRoom(roomId: string) {
-  for (const [client, sessionToken] of clientTokens) {
-    const session = service.session(sessionToken);
-    if (session?.roomId === roomId && service.isAtTable(sessionToken)) sendRoom(client, roomId, session.playerId);
-  }
-}
-
-function timeoutAction(roomId: string, playerId: string): PlayerAction {
-  const actor = service.currentActor(roomId);
-  if (!actor || actor.player.id !== playerId || !actor.room.game) return { type: 'FOLD' };
-  const legal = decisionContext(actor.room.game, playerId).legalActions;
-  return legal.types.includes('CHECK') ? { type: 'CHECK' } : { type: 'FOLD' };
-}
-
-function scheduleRoom(roomId: string) {
-  const previous = turnTimers.get(roomId);
-  if (previous) clearTimeout(previous);
-  turnTimers.delete(roomId);
-  const room = service.rooms.get(roomId);
-  if (!room) return;
-  const expiresAt = service.roomEngine.expiresAt(room);
-  if (expiresAt !== null) {
-    const timer = setTimeout(() => {
-      turnTimers.delete(roomId);
-      const closed = service.expireInactiveRoom(roomId);
-      if (!closed) {
-        if (service.rooms.has(roomId)) scheduleRoom(roomId);
-        return;
-      }
-      closed.memberTokens.forEach((token) => {
-        const memberClient = tokenClients.get(token);
-        if (memberClient) send(memberClient, { type: 'ROOM_CLOSED', roomId, message: '房间因长时间无人在线已关闭' });
-      });
-      broadcastLobby();
-    }, Math.max(0, expiresAt - Date.now()));
-    turnTimers.set(roomId, timer);
-    return;
-  }
-  if (room.status !== 'PLAYING') {
-    if (room.turnDeadline !== null) service.setTurnDeadline(roomId, null);
-    return;
-  }
-  if (room.game?.phase === 'FINISHED') {
-    const expectedHandId = room.game.handId;
-    service.setTurnDeadline(roomId, null);
-    const timer = setTimeout(() => {
-      turnTimers.delete(roomId);
-      try {
-        const current = service.rooms.get(roomId);
-        if (!current || current.status !== 'PLAYING' || current.game?.handId !== expectedHandId || current.game.phase !== 'FINISHED') return;
-        service.advanceHand(roomId);
-      } catch (error) {
-        console.warn(`自动开始下一手失败：${String(error)}`);
-      }
-      if (service.rooms.has(roomId)) {
-        scheduleRoom(roomId);
-        broadcastRoom(roomId);
-        broadcastLobby();
-      }
-    }, nextHandDelay);
-    turnTimers.set(roomId, timer);
-    return;
-  }
-  const actor = service.currentActor(roomId);
-  if (!actor?.room.game) {
-    service.setTurnDeadline(roomId, null);
-    return;
-  }
-  const expectedHandId = actor.room.game.handId;
-  const expectedVersion = actor.room.game.version;
-  const delay = actor.player.kind === 'BOT' ? 550 : actor.player.connected ? actor.room.turnSeconds * 1000 : 3_000;
-  service.setTurnDeadline(roomId, Date.now() + delay);
-  const timer = setTimeout(async () => {
-    turnTimers.delete(roomId);
-    try {
-      const current = service.currentActor(roomId);
-      if (!current?.room.game || current.player.id !== actor.player.id || current.room.game.handId !== expectedHandId || current.room.game.version !== expectedVersion) return;
-      let action: PlayerAction;
-      if (current.player.kind === 'BOT') {
-        const strategy = strategies.create(current.player.strategyId ?? 'basic-check-call');
-        action = await strategy.decide(decisionContext(current.room.game, current.player.id), { random: Math.random });
-      } else {
-        action = timeoutAction(roomId, current.player.id);
-      }
-      service.applyForPlayer(roomId, current.player.id, action);
-    } catch (error) {
-      console.warn(`自动行动失败：${String(error)}`);
-    }
-    if (service.rooms.has(roomId)) {
-      scheduleRoom(roomId);
-      broadcastRoom(roomId);
-      broadcastLobby();
-    }
-  }, delay);
-  turnTimers.set(roomId, timer);
-}
-
-function errorRoomState(sessionToken: string | undefined) {
-  const session = sessionToken ? service.session(sessionToken) : undefined;
-  if (!session?.roomId) return undefined;
-  try {
-    const { table, view } = service.roomView(session.roomId, session.playerId);
-    return { ...(table ? { table } : {}), ...(view ? { view } : {}) };
-  } catch {
-    return undefined;
-  }
-}
-
-server.on('connection', (client) => {
-  client.on('message', (raw) => {
-    let data: unknown;
-    try {
-      data = JSON.parse(raw.toString());
-    } catch {
-      send(client, { type: 'ERROR', message: '消息格式无效' });
-      return;
-    }
-    const parsed = clientMessageSchema.safeParse(data);
-    if (!parsed.success) {
-      send(client, { type: 'ERROR', message: '消息参数无效' });
-      return;
-    }
-    const message = parsed.data;
-    try {
-      if (message.type === 'HELLO') {
-        const hello = service.hello(message.sessionToken);
-        const existingClient = tokenClients.get(hello.session.token);
-        if (existingClient && existingClient !== client) existingClient.close(4001, '会话已在新连接恢复');
-        clientTokens.set(client, hello.session.token);
-        tokenClients.set(hello.session.token, client);
-        const affectedRoom = service.setConnected(hello.session.token, true);
-        const session = service.sessionView(hello.session.token);
-        send(client, { type: 'WELCOME', session, resumed: hello.resumed });
-        if (session.roomId && session.roomPresence === 'AT_TABLE') {
-          sendRoom(client, session.roomId, session.playerId);
-          broadcastRoom(session.roomId);
-        } else {
-          sendLobby(client, session.token);
-        }
-        if (affectedRoom) scheduleRoom(affectedRoom.id);
-        broadcastLobby();
-        return;
-      }
-      const sessionToken = clientTokens.get(client);
-      if (!sessionToken) throw new Error('请先建立会话');
-      if (message.type === 'LIST_ROOMS') {
-        sendLobby(client, sessionToken);
-      } else if (message.type === 'CREATE_ROOM') {
-        const room = service.createRoom(sessionToken, message);
-        broadcastRoom(room.id);
-        broadcastLobby();
-      } else if (message.type === 'JOIN_ROOM') {
-        const room = service.joinRoom(sessionToken, message.roomId, message.playerName);
-        broadcastRoom(room.id);
-        broadcastLobby();
-      } else if (message.type === 'LEAVE_ROOM') {
-        const result = service.leaveRoom(sessionToken);
-        if (result.room) {
-          scheduleRoom(result.roomId);
-          broadcastRoom(result.roomId);
-        } else {
-          const timer = turnTimers.get(result.roomId);
-          if (timer) clearTimeout(timer);
-          turnTimers.delete(result.roomId);
-        }
-        sendLobby(client, sessionToken);
-        broadcastLobby();
-      } else if (message.type === 'LEAVE_TABLE') {
-        const room = service.leaveTable(sessionToken);
-        scheduleRoom(room.id);
-        broadcastRoom(room.id);
-        sendLobby(client, sessionToken);
-        broadcastLobby();
-      } else if (message.type === 'RETURN_ROOM') {
-        const room = service.returnToRoom(sessionToken);
-        scheduleRoom(room.id);
-        sendRoom(client, room.id, service.session(sessionToken)!.playerId);
-        broadcastRoom(room.id);
-        broadcastLobby();
-      } else if (message.type === 'DISBAND_ROOM') {
-        const closed = service.disbandRoom(sessionToken);
-        const timer = turnTimers.get(closed.roomId);
-        if (timer) clearTimeout(timer);
-        turnTimers.delete(closed.roomId);
-        closed.memberTokens.forEach((token) => {
-          const memberClient = tokenClients.get(token);
-          if (memberClient) send(memberClient, { type: 'ROOM_CLOSED', roomId: closed.roomId, message: '房主已解散房间' });
-        });
-        broadcastLobby();
-      } else if (message.type === 'REQUEST_REBUY') {
-        const room = service.requestRebuy(sessionToken);
-        broadcastRoom(room.id);
-      } else if (message.type === 'DECLINE_REBUY') {
-        const room = service.declineRebuy(sessionToken);
-        scheduleRoom(room.id);
-        broadcastRoom(room.id);
-        broadcastLobby();
-      } else if (message.type === 'RESOLVE_REBUY') {
-        const room = service.resolveRebuy(sessionToken, message.playerId, message.approved);
-        scheduleRoom(room.id);
-        broadcastRoom(room.id);
-        broadcastLobby();
-      } else if (message.type === 'START_GAME') {
-        const room = service.startGame(sessionToken);
-        scheduleRoom(room.id);
-        broadcastRoom(room.id);
-        broadcastLobby();
-      } else if (message.type === 'NEW_HAND') {
-        const room = service.newHand(sessionToken);
-        scheduleRoom(room.id);
-        broadcastRoom(room.id);
-      } else if (message.type === 'ACTION') {
-        const room = service.act(sessionToken, message);
-        scheduleRoom(room.id);
-        broadcastRoom(room.id);
-      } else if (message.type === 'GET_REPLAY') {
-        send(client, { type: 'REPLAY', replay: service.replay(sessionToken, message.handId) });
-      } else if (message.type === 'RUN_SIMULATION') {
-        send(client, { type: 'SIMULATION_RESULT', result: runSimulation(message) });
-      }
-    } catch (error) {
-      const sessionToken = clientTokens.get(client);
-      const state = errorRoomState(sessionToken);
-      send(client, { type: 'ERROR', message: error instanceof Error ? error.message : '操作失败', ...state });
-    }
-  });
-
-  client.on('close', () => {
-    const sessionToken = clientTokens.get(client);
-    if (!sessionToken || tokenClients.get(sessionToken) !== client) return;
-    const roomId = service.session(sessionToken)?.roomId;
-    clientTokens.delete(client);
-    tokenClients.delete(sessionToken);
-    service.setConnected(sessionToken, false);
-    if (roomId) {
-      scheduleRoom(roomId);
-      broadcastRoom(roomId);
-    }
-    broadcastLobby();
-  });
-});
-
-httpServer.on('listening', () => {
-  console.log(`Holdem server listening on http://0.0.0.0:${port}`);
-  service.rooms.forEach((room) => scheduleRoom(room.id));
-});
-
-httpServer.listen(port, '0.0.0.0');
