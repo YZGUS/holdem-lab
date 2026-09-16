@@ -48,6 +48,7 @@ export class GameServer {
   }
 
   private accept(client: WebSocket, request: IncomingMessage) {
+    client.on('error', () => client.terminate());
     const ip = clientIp(request);
     const connectionCount = [...this.connections.values()].filter((context) => context.ip === ip).length
       + [...this.pendingConnections.values()].filter((pending) => pending.ip === ip).length;
@@ -66,6 +67,12 @@ export class GameServer {
   }
 
   private async handleMessage(client: WebSocket, request: IncomingMessage, raw: string) {
+    try {
+      this.gateway.authorizeFrame(request);
+    } catch {
+      client.close(4008, '消息过于频繁');
+      return;
+    }
     let data: unknown;
     try {
       data = JSON.parse(raw);

@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import { isIP } from 'node:net';
 import type { ClientMessage } from '@holdem/protocol';
 import type { RateLimitStore, SessionRecord, SessionStore } from './storage.js';
 
@@ -286,6 +287,11 @@ export class AccessGateway {
     if (message.type === 'RUN_SIMULATION' && !this.simulationAllowed) throw new AccessDeniedError('云端部署未开放批量模拟', 403);
   }
 
+  authorizeFrame(request: IncomingMessage) {
+    const attempt = this.rateLimits.consume(`frames:${clientIp(request)}`, 120, 10_000, this.now());
+    if (!attempt.allowed) throw new AccessDeniedError('消息过于频繁，请稍后再试', 429);
+  }
+
   authorizeLogin(request: IncomingMessage) {
     const attempt = this.rateLimits.consume(`invite-login:${clientIp(request)}`, 10, 10 * 60_000, this.now());
     if (!attempt.allowed) throw new AccessDeniedError('邀请码尝试过于频繁，请稍后再试', 429, attempt.retryAfterMs);
@@ -345,6 +351,11 @@ function firstHeader(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value?.split(',')[0]?.trim();
 }
 
-export function clientIp(request: IncomingMessage) {
-  return firstHeader(request.headers['x-forwarded-for']) ?? request.socket.remoteAddress ?? 'unknown';
+export function clientIp(request: IncomingMessage, environment: NodeJS.ProcessEnv = process.env) {
+  const peer = request.socket.remoteAddress ?? 'unknown';
+  const trusted = (environment.HOLDEM_TRUSTED_PROXIES ?? '').split(',').map((value) => value.trim());
+  const forwarded = request.headers['x-forwarded-for'];
+  // A trusted reverse proxy must overwrite this header with a single client address.
+  return trusted.includes(peer) && typeof forwarded === 'string' && isIP(forwarded)
+    ? forwarded : peer;
 }

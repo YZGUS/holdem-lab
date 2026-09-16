@@ -81,6 +81,32 @@ function gamePlayerOrObserver(roomPlayer: RoomView['players'][number], player?: 
   };
 }
 
+function secondsUntil(deadline: number) {
+  return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+}
+
+function TurnCountdown({ deadline }: { deadline: number }) {
+  const [remaining, setRemaining] = useState(() => secondsUntil(deadline));
+
+  useEffect(() => {
+    let timer = 0;
+    const tick = () => {
+      const next = secondsUntil(deadline);
+      setRemaining((current) => current === next ? current : next);
+      if (next === 0) return;
+
+      const millisecondsLeft = Math.max(0, deadline - Date.now());
+      const nextSecondBoundary = millisecondsLeft - (next - 1) * 1000;
+      timer = window.setTimeout(tick, Math.max(80, nextSecondBoundary + 20));
+    };
+
+    tick();
+    return () => window.clearTimeout(timer);
+  }, [deadline]);
+
+  return <div className={`countdown ${remaining <= 5 ? 'urgent' : ''}`}>{remaining}</div>;
+}
+
 export function PokerTable({
   room, table, view, replay, connection, busy, notice, onAction, onLeave, onDisband,
   onRequestRebuy, onDeclineRebuy, onResolveRebuy, onGetReplay, onClearReplay, onDismissNotice,
@@ -90,7 +116,6 @@ export function PokerTable({
   const [raiseTo, setRaiseTo] = useState(40);
   const [replayStep, setReplayStep] = useState(0);
   const [playingReplay, setPlayingReplay] = useState(false);
-  const [now, setNow] = useState(Date.now());
   const [cardTheme, setCardTheme] = useState<'classic' | 'contrast'>(() => sessionStorage.getItem('holdem-card-theme') === 'contrast' ? 'contrast' : 'classic');
   const [settlementOpen, setSettlementOpen] = useState(false);
   const settlementRoom = useRef<string | null>(null);
@@ -98,10 +123,6 @@ export function PokerTable({
   const [confirmingDecline, setConfirmingDecline] = useState(false);
   usePresentationEffects(table, Boolean(replay));
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 250);
-    return () => window.clearInterval(timer);
-  }, []);
   useEffect(() => {
     if (!replay) return;
     setReplayStep(0);
@@ -147,7 +168,8 @@ export function PokerTable({
   const viewerGamePlayer = displayTable.players.find((player) => player.id === room.viewerPlayerId);
   const legal = !replay && displayPrivate ? displayPrivate.legalActions : emptyLegal;
   const isHeroTurn = !replay && displayTable.currentPlayerId === room.viewerPlayerId;
-  const can = (type: ActionType) => Boolean(isHeroTurn && !busy && legal.types.includes(type));
+  const actionSurfaceReady = connection === 'OPEN' && room.status === 'PLAYING' && displayTable.phase !== 'FINISHED';
+  const can = (type: ActionType) => Boolean(actionSurfaceReady && isHeroTurn && !busy && legal.types.includes(type));
 
   useEffect(() => {
     if (legal.minRaiseTo !== null) setRaiseTo(legal.minRaiseTo);
@@ -181,7 +203,6 @@ export function PokerTable({
       ? `${currentPlayer.name}（${currentRoomPlayer.seat + 1}号位）`
       : currentPlayer?.name;
   const viewerIndex = Math.max(0, room.players.findIndex((player) => player.id === room.viewerPlayerId));
-  const remaining = !replay && room.turnDeadline ? Math.max(0, Math.ceil((room.turnDeadline - now) / 1000)) : null;
   const isHost = room.hostPlayerId === room.viewerPlayerId;
   const pendingRebuys = room.players.filter((player) => player.rebuyStatus === 'PENDING');
   const fundedPlayers = room.players.filter((player) => player.stack > 0);
@@ -191,6 +212,7 @@ export function PokerTable({
     && room.rebuyEnabled
     && viewerRoomPlayer.stack === 0
     && viewerRoomPlayer.rebuyStatus === 'NONE'
+    && displayTable.phase === 'FINISHED'
     && (room.maxRebuys === null || viewerRoomPlayer.rebuyCount < room.maxRebuys);
   const browsingReplays = !replay && room.status === 'FINISHED' && drawer === 'replays';
   const waitingRebuyPlayers = room.players.filter((player) => player.kind === 'HUMAN'
@@ -242,6 +264,7 @@ export function PokerTable({
           const stateText = replay
             ? !player.inHand ? '未参与' : player.folded ? '已弃牌' : player.allIn ? 'All-in' : ''
             : roomPlayer.presence === 'AWAY' ? '暂离' : player.stack === 0 && !player.allIn ? '观战' : !player.inHand ? '等待下一手' : player.folded ? '已弃牌' : player.allIn ? 'All-in' : !roomPlayer.connected ? '离线' : '';
+          const handRank = displayTable.handRanks[player.id];
           const relativeSeat = (index - viewerIndex + room.players.length) % room.players.length;
           return <article
             className={`seat ${player.id === room.viewerPlayerId ? 'hero' : ''} ${player.id === displayTable.currentPlayerId ? 'active' : ''} ${player.id === nextPlayerId ? 'next' : ''} ${displayTable.winnerIds.includes(player.id) ? 'winner' : ''} ${player.folded ? 'folded' : ''} ${!player.inHand ? 'spectator' : ''}`}
@@ -250,13 +273,16 @@ export function PokerTable({
             <div className="seat-cards">{ownCards?.length ? ownCards.map((card, cardIndex) => <CardFace card={card} target={{ kind: 'hole', playerId: player.id, index: cardIndex }} key={card} />) : player.inHand ? <><CardFace card="2s" hidden target={{ kind: 'hole', playerId: player.id, index: 0 }} /><CardFace card="3s" hidden target={{ kind: 'hole', playerId: player.id, index: 1 }} /></> : null}</div>
             <div className="seat-card">
               <div className={`avatar ${player.kind.toLowerCase()}`}>{player.kind === 'BOT' ? 'AI' : player.id === room.viewerPlayerId ? '你' : player.name[0]}</div>
-              <div><strong>{player.id === room.viewerPlayerId ? '你' : player.name}</strong><small>{player.kind === 'BOT' ? 'Bot' : '玩家'}{stateText ? ` · ${stateText}` : ''}</small></div>
-              <span>{player.stack.toLocaleString()}</span>
+              <div className="seat-identity"><strong>{player.name}</strong><small>{player.kind === 'BOT' ? 'Bot' : player.id === room.viewerPlayerId ? '本人' : '玩家'}</small></div>
+              <span className="seat-stack">{player.stack.toLocaleString()}</span>
               {roles.length > 0 && <div className="position-badges" aria-label={`${player.name}的位置`}>{roles.map((role) => <span key={role}>{role}</span>)}</div>}
             </div>
-            {displayTable.handRanks[player.id] && <div className="rank-chip">{displayTable.handRanks[player.id].description || displayTable.handRanks[player.id].name}</div>}
-            {player.streetBet > 0 && <div className="bet-chip">{player.streetBet}</div>}
-            {player.id === displayTable.currentPlayerId && remaining !== null && <div className={`countdown ${remaining <= 5 ? 'urgent' : ''}`}>{remaining}</div>}
+            {(stateText || handRank || player.streetBet > 0) && <div className="seat-tags">
+              {stateText && <span className="seat-status">{stateText}</span>}
+              {handRank && <span className="rank-chip">{handRank.description || handRank.name}</span>}
+              {player.streetBet > 0 && <span className="bet-chip">已下注 {player.streetBet}</span>}
+            </div>}
+            {!replay && player.id === displayTable.currentPlayerId && room.turnDeadline && <TurnCountdown deadline={room.turnDeadline} />}
           </article>;
         })}
       </div>

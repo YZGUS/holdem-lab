@@ -21,6 +21,7 @@ import {
 } from './storage.js';
 
 const port = Number(process.env.PORT ?? 8787);
+const host = process.env.HOST ?? '0.0.0.0';
 const workspaceRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const dataDirectory = process.env.HOLDEM_DATA_DIR ?? join(workspaceRoot, '.data', 'holdem');
 const webDist = process.env.HOLDEM_WEB_DIST ?? join(workspaceRoot, 'apps', 'web', 'dist');
@@ -115,12 +116,12 @@ const socketServer = new WebSocketServer({
 const gameServer = new GameServer(socketServer, service, gateway);
 
 httpServer.on('listening', () => {
-  console.log(`Holdem server listening on http://0.0.0.0:${port} (${deployment.mode})`);
+  console.log(`Holdem server listening on http://${host}:${port} (${deployment.mode})`);
   gameServer.start();
 });
 
 httpServer.on('close', () => gameServer.stop());
-httpServer.listen(port, '0.0.0.0');
+httpServer.listen(port, host);
 
 async function serveStatic(request: IncomingMessage, response: ServerResponse) {
   const pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);

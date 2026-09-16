@@ -30,7 +30,7 @@ npm ci
 npm run dev
 ```
 
-浏览器打开 [http://127.0.0.1:5173](http://127.0.0.1:5173)。此模式会同时启动：
+浏览器打开 [http://127.0.0.1:5173](http://127.0.0.1:5173) 进入牌桌。此模式会同时启动：
 
 - Web 开发服务：`0.0.0.0:5173`
 - 牌局与 WebSocket 服务：`0.0.0.0:8787`
@@ -44,7 +44,7 @@ npm run dev
    ipconfig getifaddr en0
    ```
 
-3. 其他玩家访问 `http://<电脑局域网 IP>:5173`。
+3. 其他玩家访问 `http://<电脑局域网 IP>:5173/`。
 4. 房主创建房间并分享 6 位房间码，其他玩家输入房间码加入。
 
 ## Android 手机开桌
@@ -164,7 +164,7 @@ npm run build
 PORT=8787 npm start
 ```
 
-访问 `http://<服务器地址>:8787`。如使用反向代理，需要同时转发 HTTP 和 `/ws` WebSocket。
+访问 `http://<服务器地址>:8787/`。如使用反向代理，需要同时转发 HTTP 和 `/ws` WebSocket。
 
 健康检查：
 
@@ -176,6 +176,30 @@ curl http://127.0.0.1:8787/health
 
 ```json
 {"ok":true,"rooms":0,"mode":"local"}
+```
+
+### 部署到子路径
+
+项目默认部署在域名根路径。需要把它挂载到 `/holdem/` 等子路径时，在构建阶段指定基础路径：
+
+```bash
+VITE_BASE_PATH=/holdem/ npm run build
+PORT=8787 npm start
+```
+
+应用内部仍使用 `/api` 和 `/ws`。反向代理负责去掉外部前缀，例如：
+
+```nginx
+location = /holdem/ws {
+    proxy_pass http://127.0.0.1:8787/ws;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+
+location /holdem/ {
+    proxy_pass http://127.0.0.1:8787/;
+}
 ```
 
 ### 云端受邀模式
@@ -260,7 +284,8 @@ PORT=8787 npm start
 | `HOLDEM_MAX_MESSAGE_BYTES` | `32768` | 单条 WebSocket 消息大小上限 |
 | `HOLDEM_ENABLE_SIMULATION` | 本地开启、云端关闭 | 是否允许服务端运行批量模拟 |
 | `HOLDEM_COOKIE_SECURE` | `false` | HTTPS 部署时设为 `true` |
-| `VITE_WS_URL` | 同源 `/ws` | Web 与牌局服务分开部署时的 WebSocket 地址 |
+| `VITE_BASE_PATH` | `/` | 构建后的外部挂载路径，例如 `/holdem/` |
+| `VITE_WS_URL` | 同源 `<VITE_BASE_PATH>/ws` | Web 与牌局服务分开部署时的 WebSocket 地址 |
 
 ## 架构与状态流转
 

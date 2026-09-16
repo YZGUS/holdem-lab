@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import { describe, it } from 'node:test';
 import type { ClientMessage } from '@holdem/protocol';
 import {
+  clientIp,
   AccessDeniedError,
   AccessGateway,
   AnonymousAuthProvider,
@@ -119,5 +120,14 @@ describe('access control', () => {
     );
     for (let index = 0; index < 10; index += 1) gateway.authorizeLogin(request());
     assert.throws(() => gateway.authorizeLogin(request()), /尝试过于频繁/);
+  });
+
+  it('ignores spoofed forwarding except a single address from an explicit proxy', () => {
+    const req = request();
+    req.headers['x-forwarded-for'] = '203.0.113.10';
+    assert.equal(clientIp(req, {}), '192.0.2.10');
+    assert.equal(clientIp(req, { HOLDEM_TRUSTED_PROXIES: '192.0.2.10' }), '203.0.113.10');
+    req.headers['x-forwarded-for'] = '203.0.113.10, 198.51.100.2';
+    assert.equal(clientIp(req, { HOLDEM_TRUSTED_PROXIES: '192.0.2.10' }), '192.0.2.10');
   });
 });

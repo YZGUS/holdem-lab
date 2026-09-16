@@ -20,10 +20,16 @@ export interface ClientNotice {
 
 export type AuthenticationState = 'CHECKING' | 'AUTHENTICATED' | 'REQUIRED';
 
+function appPath(path: string) {
+  const basePath = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+  return `${basePath}${path.replace(/^\/+/, '')}`;
+}
+
 function websocketUrl() {
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL as string;
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${protocol}://${window.location.host}/ws`;
+  const url = new URL(appPath('ws'), window.location.origin);
+  url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
 }
 
 export function useGameClient() {
@@ -65,7 +71,7 @@ export function useGameClient() {
 
   useEffect(() => {
     let disposed = false;
-    void fetch('/api/auth/status', { credentials: 'same-origin', cache: 'no-store' })
+    void fetch(appPath('api/auth/status'), { credentials: 'same-origin', cache: 'no-store' })
       .then(async (response) => {
         if (!response.ok) throw new Error('无法确认登录状态');
         return response.json() as Promise<{ authenticated: boolean }>;
@@ -158,7 +164,7 @@ export function useGameClient() {
         if (disposed) return;
         if (socketRef.current === socket) socketRef.current = null;
         setConnection('CLOSED');
-        void fetch('/api/auth/status', { credentials: 'same-origin', cache: 'no-store' })
+        void fetch(appPath('api/auth/status'), { credentials: 'same-origin', cache: 'no-store' })
           .then(async (response) => response.ok ? response.json() as Promise<{ authenticated: boolean }> : { authenticated: true })
           .then((status) => {
             if (disposed) return;
@@ -254,7 +260,7 @@ export function useGameClient() {
 
   const loginWithInvite = useCallback(async (code: string) => {
     setAuthenticationError(null);
-    const response = await fetch('/api/auth/invite', {
+    const response = await fetch(appPath('api/auth/invite'), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'content-type': 'application/json' },
