@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { ClientMessage, GameMode, RoomSummary, SessionView } from '@holdem/protocol';
+import { SegmentedChoice, StepperControl } from './FormControls';
 import type { ClientNotice } from './useGameClient';
 
 type CreateRoomConfig = Omit<Extract<ClientMessage, { type: 'CREATE_ROOM' }>, 'type'>;
@@ -64,6 +65,7 @@ export function Lobby({ connection, session, rooms, busy, notice, onCreate, onJo
   const [rebuyEnabled, setRebuyEnabled] = useState(true);
   const [rebuyAmount, setRebuyAmount] = useState(1000);
   const [maxRebuys, setMaxRebuys] = useState(3);
+  const effectiveBotCount = Math.min(botCount, maxPlayers - 1);
   const hasPlayerName = playerName.trim().length > 0;
   const resumeRoom = session?.roomId ? rooms.find((room) => room.id === session.roomId) : undefined;
   const modeSummary = gameMode === 'POINTS' ? '积分桌' : '淘汰赛';
@@ -88,7 +90,7 @@ export function Lobby({ connection, session, rooms, busy, notice, onCreate, onJo
       roomName: roomName.trim(),
       playerName: rememberName(),
       maxPlayers,
-      botCount: Math.min(botCount, maxPlayers - 1),
+      botCount: effectiveBotCount,
       startingStack,
       smallBlind,
       bigBlind,
@@ -200,25 +202,25 @@ export function Lobby({ connection, session, rooms, busy, notice, onCreate, onJo
           </fieldset>
           <fieldset>
             <legend>牌局规则</legend>
-            <label>牌局模式<select value={gameMode} onChange={(event) => setGameMode(event.target.value as GameMode)}><option value="POINTS">积分桌</option><option value="TOURNAMENT">淘汰赛</option></select></label>
-            <label>牌局长度<select value={maxHands} onChange={(event) => setMaxHands(Number(event.target.value))}><option value={0}>不限手数</option><option value={20}>20 手</option><option value={50}>50 手</option><option value={100}>100 手</option></select></label>
+            <SegmentedChoice label="牌局模式" value={gameMode} options={[{ value: 'POINTS', label: '积分桌' }, { value: 'TOURNAMENT', label: '淘汰赛' }]} onChange={(value) => setGameMode(value as GameMode)} />
+            <SegmentedChoice label="牌局长度" value={maxHands} options={[{ value: 0, label: '不限' }, { value: 20, label: '20 手' }, { value: 50, label: '50 手' }, { value: 100, label: '100 手' }]} onChange={setMaxHands} />
           </fieldset>
-          <fieldset>
+          <fieldset className="settings-seat-grid">
             <legend>座位与筹码</legend>
-            <label>座位数<select value={maxPlayers} onChange={(event) => setMaxPlayers(Number(event.target.value))}>{[2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value} value={value}>{value} 人桌</option>)}</select></label>
-            <label>Bot 数量<select value={Math.min(botCount, maxPlayers - 1)} onChange={(event) => setBotCount(Number(event.target.value))}>{Array.from({ length: maxPlayers }, (_, value) => <option key={value} value={value}>{value}</option>)}</select></label>
+            <StepperControl label="座位数" value={maxPlayers} min={2} max={8} formatValue={(value) => `${value} 人桌`} onChange={(value) => { setMaxPlayers(value); setBotCount((current) => Math.min(current, value - 1)); }} />
+            <StepperControl label="Bot 数量" value={effectiveBotCount} min={0} max={maxPlayers - 1} formatValue={(value) => `${value} 个`} onChange={setBotCount} />
             <label>起始筹码<input type="number" inputMode="numeric" step={100} min={200} max={100000} value={startingStack} onChange={(event) => setStartingStack(Number(event.target.value))} /></label>
             <label>小盲<input type="number" inputMode="numeric" min={1} max={10000} value={smallBlind} onChange={(event) => setSmallBlind(Number(event.target.value))} /></label>
             <label>大盲<input type="number" inputMode="numeric" min={2} max={20000} value={bigBlind} onChange={(event) => setBigBlind(Number(event.target.value))} /></label>
           </fieldset>
-          {gameMode === 'POINTS' && <fieldset>
+          {gameMode === 'POINTS' && <fieldset className="settings-rebuy-grid">
             <legend>筹码补充</legend>
-            <label>补充规则<select value={rebuyEnabled ? 'ON' : 'OFF'} onChange={(event) => setRebuyEnabled(event.target.value === 'ON')}><option value="ON">房主审批</option><option value="OFF">不允许</option></select></label>
+            <SegmentedChoice label="补充规则" value={rebuyEnabled ? 'ON' : 'OFF'} options={[{ value: 'ON', label: '房主审批' }, { value: 'OFF', label: '不允许' }]} onChange={(value) => setRebuyEnabled(value === 'ON')} />
             <label>每次补充<input type="number" inputMode="numeric" step={100} min={100} max={100000} value={rebuyAmount} disabled={!rebuyEnabled} onChange={(event) => setRebuyAmount(Number(event.target.value))} /></label>
-            <label>每人上限<select value={maxRebuys} disabled={!rebuyEnabled} onChange={(event) => setMaxRebuys(Number(event.target.value))}><option value={1}>1 次</option><option value={3}>3 次</option><option value={5}>5 次</option><option value={0}>不限</option></select></label>
+            <SegmentedChoice className="settings-wide" label="每人上限" value={maxRebuys} disabled={!rebuyEnabled} options={[{ value: 1, label: '1 次' }, { value: 3, label: '3 次' }, { value: 5, label: '5 次' }, { value: 0, label: '不限' }]} onChange={setMaxRebuys} />
           </fieldset>}
         </div>
-        <div className="settings-summary"><strong>{modeSummary} · {maxPlayers} 人桌 · {botCount} Bot</strong><span>{startingStack.toLocaleString()} 筹码 · 盲注 {smallBlind}/{bigBlind} · {lengthSummary} · {rebuySummary}</span></div>
+        <div className="settings-summary"><strong>{modeSummary} · {maxPlayers} 人桌 · {effectiveBotCount} Bot</strong><span>{startingStack.toLocaleString()} 筹码 · 盲注 {smallBlind}/{bigBlind} · {lengthSummary} · {rebuySummary}</span></div>
         <footer><button type="button" onClick={() => setSettingsOpen(false)}>取消</button><button className="primary" disabled={createDisabled}>{session?.roomId ? '请先返回原牌桌' : '使用这些设置创建'}</button></footer>
       </form>
     </div>}
