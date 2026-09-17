@@ -254,7 +254,11 @@ export function PokerTable({
       <div className={`table seats-${room.players.length}`}>
         <div className="felt-mark">H</div>
         <div className="deck-anchor" data-effect-deck aria-hidden="true"><i /><i /><i /></div>
-        <div className="pot" data-effect-pot><small>{phaseNames[displayTable.phase]} · {displayTable.pots.length > 1 ? `${displayTable.pots.length} 个底池` : '底池'}</small><strong>{displayTable.pot.toLocaleString()}</strong>{displayTable.pots.length > 1 && <em>{displayTable.pots.map((pot) => pot.amount).join(' / ')}</em>}</div>
+        <div className={`pot${displayTable.pots.length > 1 ? ' split' : ''}`} data-effect-pot>
+          <small>{phaseNames[displayTable.phase]} · {displayTable.pots.length > 1 ? `${displayTable.pots.length} 个底池` : '底池'}</small>
+          <strong>{displayTable.pot.toLocaleString()}</strong>
+          {displayTable.pots.length > 1 && <div className="pot-breakdown" aria-label="底池明细">{displayTable.pots.map((pot, index) => <span key={index}>{index === 0 ? '主池' : `边池 ${index}`}<b>{pot.amount.toLocaleString()}</b></span>)}</div>}
+        </div>
         <div className="community" aria-label="公共牌">{[0, 1, 2, 3, 4].map((index) => <CardFace card={displayTable.board[index]} target={{ kind: 'board', index }} key={index} />)}</div>
 
         {room.players.map((roomPlayer, index) => {
@@ -329,7 +333,7 @@ export function PokerTable({
       />}
     </section>
 
-    {!browsingReplays && <footer className={`action-dock${drawer ? ' panel-open' : ''}`} aria-label={replay ? '回放控制' : '玩家操作'}>
+    {!browsingReplays && <footer className={`action-dock${drawer ? ' panel-open' : ''}${canRequestRebuy ? ' decision-mode' : ''}`} aria-label={replay ? '回放控制' : '玩家操作'}>
       {isHost && pendingRebuys.length > 0 && <div className="rebuy-requests">{pendingRebuys.map((player) => <div key={player.id}><span>{player.name} 申请补充 {room.rebuyAmount.toLocaleString()}</span><button disabled={busy} onClick={() => onResolveRebuy(player.id, false)}>拒绝</button><button className="primary" disabled={busy} onClick={() => onResolveRebuy(player.id, true)}>批准</button></div>)}</div>}
       {replay ? <div className="replay-controls">
         <button onClick={() => setReplayStep((step) => Math.max(0, step - 1))}>上一步</button>
@@ -341,14 +345,14 @@ export function PokerTable({
       </div> : <>
         {raiseOpen && legal.minRaiseTo !== null && <div className="raise-panel" role="dialog" aria-label="加注设置"><div className="quick-row">{quickRaises.map((item) => <button key={item.label} onClick={() => setRaiseTo(item.value)}>{item.label}</button>)}<button onClick={() => setRaiseTo(legal.maxRaiseTo)}>全下</button></div><label><span>加注到</span><output>{raiseTo.toLocaleString()}</output><input type="range" min={legal.minRaiseTo} max={legal.maxRaiseTo} value={raiseTo} onChange={(event) => setRaiseTo(Number(event.target.value))} /></label><button className="confirm" onClick={() => act({ type: 'RAISE', raiseTo })}>确认加注</button></div>}
         {room.status === 'FINISHED' ? <button className="match-finished" onClick={() => setSettlementOpen(true)}>整局结束 · 查看排行榜</button>
-          : canRequestRebuy ? <div className="bust-decision"><span><strong>筹码已用完</strong>牌局已暂停，请选择是否继续参赛</span><div><button className="decline" disabled={busy} onClick={() => setConfirmingDecline(true)}>放弃本局</button><button className="primary" disabled={busy} onClick={onRequestRebuy}>申请补充 {room.rebuyAmount.toLocaleString()}</button></div></div>
+          : canRequestRebuy ? <div className="bust-decision"><div className="decision-copy"><span>本手已结束</span><strong>筹码已用完</strong><p>补充后从下一手返回牌桌；放弃后仍可观战和查看排名。</p></div><div className="decision-actions"><button className="decline" disabled={busy} onClick={() => setConfirmingDecline(true)}>放弃本局</button><button className="primary" disabled={busy} onClick={onRequestRebuy}>申请补充 {room.rebuyAmount.toLocaleString()}</button></div></div>
           : isObserver ? <div className="observer-bar"><span>{observerText}</span></div>
           : pausedForPlayers ? <div className="round-paused"><span><strong>牌局暂停</strong>{waitingRebuyPlayers.length > 0 ? `等待 ${waitingRebuyPlayers.length} 名玩家决定是否补充筹码` : fundedPlayers[0] ? `${fundedPlayers[0].id === room.viewerPlayerId ? '你' : fundedPlayers[0].name} 暂时领先 · ${fundedPlayers[0].stack.toLocaleString()}` : '暂无可参赛玩家'}</span></div>
             : displayTable.phase === 'FINISHED' ? <p className="auto-next-hand">{room.status === 'PAUSED' ? '牌局已暂停，等待玩家补充筹码' : '下一手即将自动开始…'}</p>
               : viewerGamePlayer?.allIn && !viewerGamePlayer.folded ? <p className="auto-next-hand">已全下，等待本手结算</p>
                 : !isHeroTurn ? <p className="waiting-action">{currentPlayerLabel ? `等待 ${currentPlayerLabel}行动` : '正在同步牌局'}</p>
                   : <div className="main-actions"><button disabled={!can('FOLD')} onClick={() => act({ type: 'FOLD' })}>弃牌</button><button disabled={!can(mainAction.action.type)} onClick={() => act(mainAction.action)}>{mainAction.label}</button><button className="primary raise-trigger" disabled={!can('RAISE') && !can('ALL_IN')} onClick={() => legal.types.includes('RAISE') ? setRaiseOpen((open) => !open) : act({ type: 'ALL_IN' })}>{thirdLabel}</button></div>}
-        <p className={notice?.tone === 'error' ? 'notice error' : 'notice'}>{notice ? <><span>{notice.message}</span><button aria-label="关闭提示" onClick={onDismissNotice}>×</button></> : busy ? '正在确认…' : canRequestRebuy ? '选择后由服务器判断继续牌局或进入最终结算' : isObserver ? observerText : isHeroTurn ? '请选择你的行动' : '当前操作区将在轮到你时出现'}</p>
+        {(notice || busy || !canRequestRebuy) && <p className={notice?.tone === 'error' ? 'notice error' : 'notice'}>{notice ? <><span>{notice.message}</span><button aria-label="关闭提示" onClick={onDismissNotice}>×</button></> : busy ? '正在确认…' : isObserver ? observerText : isHeroTurn ? '请选择你的行动' : '当前操作区将在轮到你时出现'}</p>}
       </>}
     </footer>}
   </main>;

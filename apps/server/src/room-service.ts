@@ -86,6 +86,28 @@ function roomCode() {
   return randomBytes(4).toString('hex').slice(0, 6).toUpperCase();
 }
 
+function displayNameKey(name: string) {
+  return name.normalize('NFKC').toLocaleLowerCase('zh-CN');
+}
+
+function availablePlayerName(players: readonly RoomPlayer[], requestedName: string) {
+  const base = requestedName.trim() || '玩家';
+  const used = new Set(players.map((player) => displayNameKey(player.name)));
+  if (!used.has(displayNameKey(base))) return base;
+
+  for (let index = 2; index < 10_000; index += 1) {
+    const suffix = ` ${index}`;
+    let prefix = '';
+    for (const character of base) {
+      if (`${prefix}${character}${suffix}`.length > 16) break;
+      prefix += character;
+    }
+    const candidate = `${prefix || '玩'}${suffix}`;
+    if (!used.has(displayNameKey(candidate))) return candidate;
+  }
+  throw new Error('无法分配可辨识的玩家昵称');
+}
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -194,7 +216,7 @@ export class RoomService {
     while (this.rooms.has(id)) id = roomCode();
     const players: RoomPlayer[] = [{
       id: principal.userId,
-      name: message.playerName,
+      name: availablePlayerName([], message.playerName),
       kind: 'HUMAN',
       seat: 0,
       stack: message.startingStack,
@@ -207,7 +229,7 @@ export class RoomService {
     for (let index = 0; index < message.botCount; index += 1) {
       players.push({
         id: `${id}-bot-${index + 1}`,
-        name: botNames[index],
+        name: availablePlayerName(players, botNames[index]),
         kind: 'BOT',
         seat: index + 1,
         stack: message.startingStack,
@@ -262,9 +284,10 @@ export class RoomService {
     const seat = Array.from({ length: room.maxPlayers }, (_, index) => index)
       .find((index) => !room.players.some((player) => player.seat === index));
     if (seat === undefined) throw new Error('没有可用座位');
+    const displayName = availablePlayerName(room.players, playerName);
     room.players.push({
       id: principal.userId,
-      name: playerName,
+      name: displayName,
       kind: 'HUMAN',
       seat,
       stack: room.startingStack,
@@ -274,7 +297,7 @@ export class RoomService {
       rebuyCount: 0,
       rebuyStatus: 'NONE',
     });
-    this.addLedger(room, 'INITIAL_BUY_IN', principal.userId, `${playerName} 获得起始筹码 ${room.startingStack}`, room.startingStack);
+    this.addLedger(room, 'INITIAL_BUY_IN', principal.userId, `${displayName} 获得起始筹码 ${room.startingStack}`, room.startingStack);
     room.players.sort((left, right) => left.seat - right.seat);
     this.roomEngine.reconcile(room, this.now());
     this.saveRoom(room);

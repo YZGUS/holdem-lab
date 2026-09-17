@@ -63,6 +63,20 @@ describe('room and session flow', () => {
     assert.equal(restored.rooms.get(room.id)!.game!.version, game.version + 1);
   });
 
+  it('keeps display names distinguishable when players keep the same default nickname', () => {
+    const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
+    const host = user();
+    const room = service.createRoom(host, { ...roomRequest('玩家'), maxPlayers: 4 });
+    const second = user();
+    const third = user();
+
+    service.joinRoom(second, room.id, '玩家');
+    service.joinRoom(third, room.id, '玩家');
+
+    assert.deepEqual(room.players.map((player) => player.name), ['玩家', '玩家 2', '玩家 3']);
+    assert.match(room.ledger.at(-1)!.text, /^玩家 3 获得起始筹码/);
+  });
+
   it('rejects an action from a player whose turn has not arrived', () => {
     const service = new RoomService(new MemoryRoomRepository<PersistedRoom>());
     const first = user();
